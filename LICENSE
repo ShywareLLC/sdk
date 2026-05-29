@@ -1,0 +1,94 @@
+SHYWARE SDK EVALUATION LICENSE
+Version 1.0 — Effective May 29, 2026
+
+Copyright © 2026 Nicholas Carducci. All rights reserved.
+Shyware is a trademark of Shyware LLC.
+
+────────────────────────────────────────────────────────────
+
+1. GRANT OF EVALUATION LICENSE
+
+Subject to the terms of this License, Nicholas Carducci
+("Licensor") grants you a limited, non-exclusive,
+non-transferable, royalty-free license to:
+
+  (a) download, copy, and install the Software for the
+      purpose of evaluation, testing, and development;
+
+  (b) integrate the Software into applications solely for
+      non-production use; and
+
+  (c) submit contributions to the Software under the terms
+      of the Contributor License Agreement published at
+      https://shyware.fyi/legal/.
+
+2. RESTRICTIONS
+
+You may NOT, without a separate written Commercial License
+Agreement executed with Shyware LLC:
+
+  (a) deploy the Software or any application incorporating
+      the Software in a production environment or any
+      environment serving end users;
+
+  (b) use the Software for any commercial purpose,
+      including providing services to third parties;
+
+  (c) sublicense, sell, resell, transfer, assign, or
+      otherwise commercialize the Software; or
+
+  (d) remove or alter any copyright, trademark, patent
+      notice, or other proprietary notice embedded in the
+      Software.
+
+3. PATENT RIGHTS NOT GRANTED
+
+This License does not grant any rights under any patent or
+patent application held by Nicholas Carducci or Shyware LLC,
+including without limitation U.S. Patent Application No.
+64/074,348 and any patents issuing therefrom or claiming
+priority thereto. No patent license is granted by
+implication, estoppel, or otherwise.
+
+4. COMMERCIAL LICENSING
+
+To obtain a Commercial License for production deployment,
+contact Shyware LLC:
+
+  inquiries@shyware.fyi
+  https://shyware.fyi
+
+5. ATTRIBUTION
+
+Any permitted use of the Software must retain this License,
+all copyright notices, and the protocol-version identifiers
+embedded in the Software.
+
+6. DISCLAIMER OF WARRANTIES
+
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY
+KIND. LICENSOR DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+NON-INFRINGEMENT.
+
+7. LIMITATION OF LIABILITY
+
+IN NO EVENT SHALL LICENSOR BE LIABLE FOR ANY INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ARISING OUT OF OR IN CONNECTION WITH THIS LICENSE OR THE
+USE OF THE SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+
+8. GOVERNING LAW
+
+This License is governed by the laws of the State of New
+Jersey, United States, without regard to conflict of law
+principles. Any dispute arising under this License shall be
+resolved in the state or federal courts located in New
+Jersey.
+
+────────────────────────────────────────────────────────────
+
+For commercial licensing, Letters of Interest, or pilot
+inquiries: inquiries@shyware.fyi
