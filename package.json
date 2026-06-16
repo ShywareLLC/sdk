@@ -1,6 +1,6 @@
 {
   "name": "@shyware/sdk",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Structurally anonymous distributed-ledger protocol SDK. Non-linkability by write architecture — not policy.",
   "type": "module",
   "main": "./index.js",
@@ -19,10 +19,22 @@
     "./adapters/ledger/fabric": "./adapters/ledger/fabric.js",
     "./adapters/ledger/cockroach": "./adapters/ledger/cockroach.js",
     "./adapters/ledger/coverTraffic": "./adapters/ledger/coverTraffic.js",
-    "./adapters/ledger/cockroachStore": { "require": "./adapters/ledger/cockroachStore.cjs", "default": "./adapters/ledger/cockroachStore.cjs" },
-    "./adapters/ledger/scytaleCheckpoint": { "require": "./adapters/ledger/scytaleCheckpoint.cjs", "default": "./adapters/ledger/scytaleCheckpoint.cjs" },
-    "./adapters/server/utils": { "require": "./adapters/server/utils.cjs", "default": "./adapters/server/utils.cjs" },
-    "./adapters/wire/runtime": { "require": "./adapters/wire/runtime.cjs", "default": "./adapters/wire/runtime.cjs" },
+    "./adapters/ledger/cockroachStore": {
+      "require": "./adapters/ledger/cockroachStore.cjs",
+      "default": "./adapters/ledger/cockroachStore.cjs"
+    },
+    "./adapters/ledger/scytaleCheckpoint": {
+      "require": "./adapters/ledger/scytaleCheckpoint.cjs",
+      "default": "./adapters/ledger/scytaleCheckpoint.cjs"
+    },
+    "./adapters/server/utils": {
+      "require": "./adapters/server/utils.cjs",
+      "default": "./adapters/server/utils.cjs"
+    },
+    "./adapters/wire/runtime": {
+      "require": "./adapters/wire/runtime.cjs",
+      "default": "./adapters/wire/runtime.cjs"
+    },
     "./adapters/signing": "./adapters/signing/interface.js",
     "./adapters/signing/software": "./adapters/signing/software.js",
     "./adapters/signing/kms": "./adapters/signing/kms.js",
