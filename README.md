@@ -40,6 +40,22 @@ npm install @shyware/sdk
 Requires a Commercial License Agreement for production deployment.
 See [shyware.fyi/legal](https://shyware.fyi/legal/) for terms.
 
+## Publishing
+
+This package is published from the npm account `shyware`, which uses `auth-and-writes` two-factor auth with npm web/passkey authentication on the user's MacBook.
+
+Release flow:
+
+```bash
+npm version minor # or npm version patch
+npm pack --dry-run
+npm publish --access public
+npm view @shyware/sdk version dist-tags --json
+git push origin main --follow-tags
+```
+
+Run `npm publish --access public` in an interactive TTY. When npm asks to press Enter to authenticate in the browser, press Enter and have the user approve the passkey prompt on the MacBook. Do not ask for a numeric OTP unless npm explicitly asks for one after web/passkey auth fails.
+
 ## Quick start
 
 ```js
