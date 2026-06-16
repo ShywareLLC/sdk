@@ -16,11 +16,23 @@ CHANNEL=shyware
 CHAINCODE_NAME=shyware
 CHAINCODE_VERSION=2.0
 CHAINCODE_SEQUENCE=3
-if [ -n "${SHYWARE_CHAINCODE_DIR:-}" ]; then
-  CHAINCODE_DIR="$(cd "${SHYWARE_CHAINCODE_DIR}" && pwd)"
-else
-  CHAINCODE_DIR="$(cd "${DIR}/../../../../../../domain/state/fabric" && pwd)"
-fi
+resolve_chaincode_dir() {
+  if [ -n "${SHYWARE_CHAINCODE_DIR:-}" ]; then
+    cd "${SHYWARE_CHAINCODE_DIR}" && pwd
+    return
+  fi
+  for candidate in \
+    "${DIR}/../../../../domain/state/fabric" \
+    "${DIR}/../../../../../../domain/state/fabric"; do
+    if [ -d "${candidate}" ]; then
+      cd "${candidate}" && pwd
+      return
+    fi
+  done
+  echo "Unable to locate Shyware Fabric chaincode. Set SHYWARE_CHAINCODE_DIR or install an SDK package that includes domain/state/fabric." >&2
+  exit 1
+}
+CHAINCODE_DIR="$(resolve_chaincode_dir)"
 
 export PATH="${FABRIC_BIN}:${PATH}"
 export FABRIC_CFG_PATH="${DIR}"         # for cryptogen/configtxgen (needs configtx.yaml)
@@ -393,6 +405,18 @@ WantedBy=multi-user.target
 UNIT
 
 sudo systemctl daemon-reload
+
+# Build the chaincode server binary used by the ccaas systemd service.
+echo "▶ Building native chaincode server..."
+if ! command -v go >/dev/null 2>&1; then
+  echo "Go is required to build ${CHAINCODE_DIR}; install Go or provide /home/ubuntu/shyware-cc." >&2
+  test -x /home/ubuntu/shyware-cc || exit 1
+else
+  pushd "${CHAINCODE_DIR}" >/dev/null
+  GOWORK=off go build -o /home/ubuntu/shyware-cc .
+  popd >/dev/null
+  chmod +x /home/ubuntu/shyware-cc
+fi
 
 # ── 8. Stop Docker containers (if running) ───────────────────────────────────
 if docker ps 2>/dev/null | grep -qE 'deploy-peer|deploy-orderer'; then

@@ -10,11 +10,23 @@ CHAINCODE_NAME=shyware
 CHAINCODE_VERSION=1.0
 CHAINCODE_SEQUENCE=1
 DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -n "${SHYWARE_CHAINCODE_DIR:-}" ]; then
-  CHAINCODE_DIR="$(cd "${SHYWARE_CHAINCODE_DIR}" && pwd)"
-else
-  CHAINCODE_DIR="$(cd "${DIR}/../../../../../../domain/state/fabric" && pwd)"
-fi
+resolve_chaincode_dir() {
+  if [ -n "${SHYWARE_CHAINCODE_DIR:-}" ]; then
+    cd "${SHYWARE_CHAINCODE_DIR}" && pwd
+    return
+  fi
+  for candidate in \
+    "${DIR}/../../../../domain/state/fabric" \
+    "${DIR}/../../../../../../domain/state/fabric"; do
+    if [ -d "${candidate}" ]; then
+      cd "${candidate}" && pwd
+      return
+    fi
+  done
+  echo "Unable to locate Shyware Fabric chaincode. Set SHYWARE_CHAINCODE_DIR or install an SDK package that includes domain/state/fabric." >&2
+  exit 1
+}
+CHAINCODE_DIR="$(resolve_chaincode_dir)"
 
 # ── 1. Install Fabric binaries if missing ────────────────────────────────────
 if ! command -v peer &>/dev/null; then

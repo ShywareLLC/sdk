@@ -10,7 +10,8 @@
     "protocol/",
     "adapters/",
     "providers/",
-    "utils/"
+    "utils/",
+    "domain/"
   ],
   "exports": {
     ".": "./index.js",
