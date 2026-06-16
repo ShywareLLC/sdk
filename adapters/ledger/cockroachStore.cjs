@@ -9,7 +9,7 @@ const {
   createSignedCheckpoint,
   createExportBundle,
   verifyExportBundle
-} = require("./scytaleCheckpoint");
+} = require("./scytaleCheckpoint.cjs");
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS verification_sessions (
