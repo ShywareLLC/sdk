@@ -1,9 +1,12 @@
 {
   "name": "@shyware/sdk",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "description": "Structurally anonymous distributed-ledger protocol SDK. Non-linkability by write architecture — not policy.",
   "type": "module",
   "main": "./index.js",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "files": [
     "index.js",
     "clients/",
@@ -19,7 +22,16 @@
     "./adapters/ledger": "./adapters/ledger/interface.js",
     "./adapters/ledger/fabric": "./adapters/ledger/fabric.js",
     "./adapters/ledger/cockroach": "./adapters/ledger/cockroach.js",
+    "./adapters/ledger/dual": "./adapters/ledger/dual.js",
     "./adapters/ledger/coverTraffic": "./adapters/ledger/coverTraffic.js",
+    "./adapters/migration": {
+      "require": "./adapters/migration/engine.cjs",
+      "default": "./adapters/migration/index.js"
+    },
+    "./adapters/migration/engine": {
+      "require": "./adapters/migration/engine.cjs",
+      "default": "./adapters/migration/index.js"
+    },
     "./adapters/ledger/cockroachStore": {
       "require": "./adapters/ledger/cockroachStore.cjs",
       "default": "./adapters/ledger/cockroachStore.cjs"

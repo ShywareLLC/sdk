@@ -1,6 +1,11 @@
 const crypto = require("crypto");
 const { Pool } = require("pg");
 const {
+  UNINITIALIZED_VERSION,
+  createMigrationRegistry,
+  runMigrations
+} = require("../migration/engine.cjs");
+const {
   normalizeTenantId: normalizeMigrationTenantId,
   normalizeMailboxRecord,
   normalizeDispatchRecord,
@@ -10,6 +15,14 @@ const {
   createExportBundle,
   verifyExportBundle
 } = require("./scytaleCheckpoint.cjs");
+
+let SDK_VERSION = "0.0.0";
+try {
+  SDK_VERSION = require("../../package.json").version || SDK_VERSION;
+} catch (_) {}
+
+const COCKROACH_COMPONENT = "cockroach-store";
+const COCKROACH_SCHEMA_VERSION = "2026-06-16.1";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS verification_sessions (
@@ -234,6 +247,194 @@ ALTER TABLE scytale_dispatches
 ALTER TABLE scytale_receipts
   ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
 `;
+
+const MIGRATION_STATE_SQL = `
+CREATE TABLE IF NOT EXISTS shyware_migration_state (
+  component TEXT PRIMARY KEY,
+  version TEXT NOT NULL,
+  sdk_version TEXT NULL,
+  status TEXT NOT NULL DEFAULT 'ready',
+  stack TEXT NULL,
+  ledger_role TEXT NULL,
+  source_ledger TEXT NULL,
+  target_ledger TEXT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS shyware_migration_steps (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  component TEXT NOT NULL,
+  migration_id TEXT NOT NULL,
+  from_version TEXT NOT NULL,
+  to_version TEXT NOT NULL,
+  sdk_version TEXT NULL,
+  type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS shyware_migration_steps_component_idx
+  ON shyware_migration_steps (component, applied_at DESC);
+`;
+
+function createCockroachMigrationStateStore(pool) {
+  let ensurePromise = null;
+  async function ensure() {
+    if (!ensurePromise) ensurePromise = pool.query(MIGRATION_STATE_SQL);
+    await ensurePromise;
+  }
+  return {
+    async getComponentState(component) {
+      await ensure();
+      const { rows } = await pool.query(
+        `SELECT component, version, sdk_version, status, stack, ledger_role,
+                source_ledger, target_ledger, metadata, updated_at
+           FROM shyware_migration_state
+          WHERE component = $1`,
+        [component]
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        component: row.component,
+        version: row.version,
+        sdkVersion: row.sdk_version,
+        status: row.status,
+        stack: row.stack,
+        ledgerRole: row.ledger_role,
+        sourceLedger: row.source_ledger,
+        targetLedger: row.target_ledger,
+        metadata: row.metadata || {},
+        updatedAt: row.updated_at?.toISOString?.() || row.updated_at
+      };
+    },
+    async setComponentState(state) {
+      await ensure();
+      await pool.query(
+        `UPSERT INTO shyware_migration_state (
+           component, version, sdk_version, status, stack, ledger_role,
+           source_ledger, target_ledger, metadata, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, now())`,
+        [
+          state.component,
+          state.version,
+          state.sdkVersion || null,
+          state.status || "ready",
+          state.stack || null,
+          state.ledgerRole || null,
+          state.sourceLedger || null,
+          state.targetLedger || null,
+          JSON.stringify(state.metadata || {})
+        ]
+      );
+    },
+    async recordMigrationStep(step) {
+      await ensure();
+      await pool.query(
+        `INSERT INTO shyware_migration_steps (
+           component, migration_id, from_version, to_version, sdk_version,
+           type, status, metadata
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+        [
+          step.component,
+          step.migrationId,
+          step.fromVersion,
+          step.toVersion,
+          step.sdkVersion || null,
+          step.type || "additive",
+          step.status || "applied",
+          JSON.stringify(step.metadata || {})
+        ]
+      );
+    },
+    async listMigrationSteps(component) {
+      await ensure();
+      const { rows } = await pool.query(
+        `SELECT component, migration_id, from_version, to_version, sdk_version,
+                type, status, metadata, applied_at
+           FROM shyware_migration_steps
+          WHERE component = $1
+          ORDER BY applied_at ASC`,
+        [component]
+      );
+      return rows.map(row => ({
+        component: row.component,
+        migrationId: row.migration_id,
+        fromVersion: row.from_version,
+        toVersion: row.to_version,
+        sdkVersion: row.sdk_version,
+        type: row.type,
+        status: row.status,
+        metadata: row.metadata || {},
+        appliedAt: row.applied_at?.toISOString?.() || row.applied_at
+      }));
+    }
+  };
+}
+
+const cockroachMigrationRegistry = createMigrationRegistry({
+  component: COCKROACH_COMPONENT,
+  migrations: [
+    {
+      id: "cockroach-store:bootstrap-2026-06-16.1",
+      fromVersion: UNINITIALIZED_VERSION,
+      toVersion: COCKROACH_SCHEMA_VERSION,
+      type: "additive",
+      description: "Create or repair the current Shyware CockroachDB schema.",
+      canAutoRun: true,
+      up: async ({ pool }) => {
+        await pool.query(SCHEMA_SQL);
+      },
+      validate: async ({ pool }) => {
+        await pool.query("SELECT 1 FROM vote_receipts LIMIT 1");
+        await pool.query("SELECT 1 FROM scytale_mailboxes LIMIT 1");
+      }
+    }
+  ]
+});
+
+async function runCockroachStoreMigrations(pool, {
+  currentVersion,
+  targetVersion = COCKROACH_SCHEMA_VERSION,
+  sdkVersion = SDK_VERSION,
+  stack = process.env.SHYWARE_STACK ||
+    process.env.STACK_NUM ||
+    process.env.FABRIC_MODE ||
+    "stack-agnostic",
+  dryRun = false,
+  allowManual = false,
+  allowDestructive = false,
+  allowWithoutBackup = false,
+  backupVerified = false,
+  ledgerRole = process.env.SHYWARE_LEDGER_ROLE || "operator",
+  sourceLedger = process.env.SHYWARE_SOURCE_LEDGER || null,
+  targetLedger = process.env.SHYWARE_TARGET_LEDGER || null
+} = {}) {
+  const summary = await runMigrations({
+    registry: cockroachMigrationRegistry,
+    store: createCockroachMigrationStateStore(pool),
+    component: COCKROACH_COMPONENT,
+    currentVersion,
+    targetVersion,
+    sdkVersion,
+    stack,
+    context: { pool },
+    dryRun,
+    allowManual,
+    allowDestructive,
+    allowWithoutBackup,
+    backupVerified,
+    ledgerRole,
+    sourceLedger,
+    targetLedger
+  });
+  if (!dryRun && summary.applied.length === 0 && summary.fromVersion === summary.toVersion) {
+    await pool.query(SCHEMA_SQL);
+  }
+  return summary;
+}
 
 function normalizeTimestamp(value) {
   if (!value) return null;
@@ -547,7 +748,7 @@ function createCockroachStore({
       ssl,
       max: Number(process.env.COCKROACH_POOL_MAX || 10)
     });
-    initPromise = pool.query(SCHEMA_SQL);
+    initPromise = runCockroachStoreMigrations(pool);
     await initPromise;
   }
 
@@ -812,10 +1013,35 @@ function createCockroachStore({
     );
   }
 
+  async function getMigrationStatus() {
+    await init();
+    const store = createCockroachMigrationStateStore(pool);
+    const state = await store.getComponentState(COCKROACH_COMPONENT);
+    return {
+      component: COCKROACH_COMPONENT,
+      currentVersion: state?.version || UNINITIALIZED_VERSION,
+      targetVersion: COCKROACH_SCHEMA_VERSION,
+      sdkVersion: state?.sdkVersion || SDK_VERSION,
+      status: state?.status || "ready",
+      stack: state?.stack || null,
+      ledgerRole: state?.ledgerRole || null,
+      sourceLedger: state?.sourceLedger || null,
+      targetLedger: state?.targetLedger || null,
+      updatedAt: state?.updatedAt || null
+    };
+  }
+
+  async function listMigrationHistory() {
+    await init();
+    return createCockroachMigrationStateStore(pool).listMigrationSteps(COCKROACH_COMPONENT);
+  }
+
   return {
     isConfigured,
     init,
     query,
+    getMigrationStatus,
+    listMigrationHistory,
     async saveVerificationSession(session) {
       const result = await query(
         `INSERT INTO verification_sessions (
@@ -1843,4 +2069,11 @@ function createCockroachStore({
   };
 }
 
-module.exports = { createCockroachStore };
+module.exports = {
+  createCockroachStore,
+  createCockroachMigrationStateStore,
+  cockroachMigrationRegistry,
+  runCockroachStoreMigrations,
+  COCKROACH_COMPONENT,
+  COCKROACH_SCHEMA_VERSION
+};

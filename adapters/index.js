@@ -1,7 +1,9 @@
 export { LedgerInterface }          from './ledger/interface.js';
 export { FabricLedgerInterface }    from './ledger/fabric.js';
 export { CockroachLedgerInterface } from './ledger/cockroach.js';
+export { DualLedgerInterface }      from './ledger/dual.js';
 export { CoverTrafficInterface, wrapWithCoverTraffic } from './ledger/coverTraffic.js';
+export * from './migration/index.js';
 export { SigningInterface }         from './signing/interface.js';
 export { SoftwareSigningInterface } from './signing/software.js';
 export { AwsKmsSigningInterface, KmsSigningInterface } from './signing/kms.js';
