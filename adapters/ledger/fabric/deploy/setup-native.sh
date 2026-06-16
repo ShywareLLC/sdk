@@ -15,7 +15,7 @@ DATA_DIR=/home/ubuntu/fabric-native      # ledger storage, not crypto material
 CHANNEL=shyware
 CHAINCODE_NAME=shyware
 CHAINCODE_VERSION=2.0
-CHAINCODE_SEQUENCE=3
+CHAINCODE_SEQUENCE=1
 resolve_chaincode_dir() {
   if [ -n "${SHYWARE_CHAINCODE_DIR:-}" ]; then
     cd "${SHYWARE_CHAINCODE_DIR}" && pwd
@@ -96,8 +96,6 @@ General:
 FileLedger:
   Location: ${DATA_DIR}/orderer
 
-Cluster:
-  SendBufferSize: 10
 
 Operations:
   ListenAddress: 127.0.0.1:8443
@@ -408,20 +406,22 @@ sudo systemctl daemon-reload
 
 # Build the chaincode server binary used by the ccaas systemd service.
 echo "▶ Building native chaincode server..."
-if ! command -v go >/dev/null 2>&1; then
-  echo "Go is required to build ${CHAINCODE_DIR}; install Go or provide /home/ubuntu/shyware-cc." >&2
-  test -x /home/ubuntu/shyware-cc || exit 1
-else
+if command -v go >/dev/null 2>&1; then
   pushd "${CHAINCODE_DIR}" >/dev/null
   GOWORK=off go build -o /home/ubuntu/shyware-cc .
   popd >/dev/null
   chmod +x /home/ubuntu/shyware-cc
+elif [ -x /home/ubuntu/shyware-cc ]; then
+  echo "Go not found; using existing /home/ubuntu/shyware-cc."
+else
+  echo "Go is required to build ${CHAINCODE_DIR}; install Go or provide /home/ubuntu/shyware-cc." >&2
+  exit 1
 fi
 
 # ── 8. Stop Docker containers (if running) ───────────────────────────────────
-if docker ps 2>/dev/null | grep -qE 'deploy-peer|deploy-orderer'; then
+if docker ps 2>/dev/null | grep -qE 'deploy-peer|deploy-orderer|deploy-cli'; then
   echo "▶ Stopping Docker Fabric containers..."
-  docker compose -f "${DIR}/docker-compose.yml" down -v 2>/dev/null || true
+  docker stop deploy-cli-1 deploy-peer0.org1.example.com-1 deploy-orderer.example.com-1 2>/dev/null || true
 fi
 
 # ── 9. Start orderer and peer ────────────────────────────────────────────────
@@ -429,11 +429,13 @@ echo "▶ Starting orderer..."
 sudo systemctl enable fabric-orderer
 sudo systemctl restart fabric-orderer
 sleep 4
+sudo systemctl is-active --quiet fabric-orderer
 
 echo "▶ Starting peer..."
 sudo systemctl enable fabric-peer
 sudo systemctl restart fabric-peer
 sleep 4
+sudo systemctl is-active --quiet fabric-peer
 
 # ── 10. Create channel and join peer ─────────────────────────────────────────
 export CORE_PEER_LOCALMSPID=Org1MSP
@@ -504,12 +506,15 @@ peer lifecycle chaincode commit \
   --tlsRootCertFiles "${PEER_TLS}/ca.crt"
 
 echo "▶ Starting chaincode service..."
+sudo systemctl stop fabric-chaincode 2>/dev/null || true
+pkill -f "^/home/ubuntu/shyware-cc" 2>/dev/null || true
 sudo systemctl enable fabric-chaincode
 sudo systemctl restart fabric-chaincode
 sleep 2
+sudo systemctl is-active --quiet fabric-chaincode
 
 echo "▶ Verifying..."
-peer chaincode invoke \
+timeout 30 peer chaincode invoke \
   -o orderer.example.com:7050 --tls --cafile "${ORDERER_TLS}" \
   -C "${CHANNEL}" -n "${CHAINCODE_NAME}" \
   --peerAddresses peer0.org1.example.com:7051 \
