@@ -10,7 +10,11 @@ CHAINCODE_NAME=shyware
 CHAINCODE_VERSION=1.0
 CHAINCODE_SEQUENCE=1
 DIR="$(cd "$(dirname "$0")" && pwd)"
-CHAINCODE_DIR="$(cd "${DIR}/../../../../../../domain/state/fabric" && pwd)"
+if [ -n "${SHYWARE_CHAINCODE_DIR:-}" ]; then
+  CHAINCODE_DIR="$(cd "${SHYWARE_CHAINCODE_DIR}" && pwd)"
+else
+  CHAINCODE_DIR="$(cd "${DIR}/../../../../../../domain/state/fabric" && pwd)"
+fi
 
 # ── 1. Install Fabric binaries if missing ────────────────────────────────────
 if ! command -v peer &>/dev/null; then

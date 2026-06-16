@@ -16,7 +16,11 @@ CHANNEL=shyware
 CHAINCODE_NAME=shyware
 CHAINCODE_VERSION=2.0
 CHAINCODE_SEQUENCE=3
-CHAINCODE_DIR="$(cd "${DIR}/../../../../../../domain/state/fabric" && pwd)"
+if [ -n "${SHYWARE_CHAINCODE_DIR:-}" ]; then
+  CHAINCODE_DIR="$(cd "${SHYWARE_CHAINCODE_DIR}" && pwd)"
+else
+  CHAINCODE_DIR="$(cd "${DIR}/../../../../../../domain/state/fabric" && pwd)"
+fi
 
 export PATH="${FABRIC_BIN}:${PATH}"
 export FABRIC_CFG_PATH="${DIR}"         # for cryptogen/configtxgen (needs configtx.yaml)
