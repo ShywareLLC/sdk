@@ -536,6 +536,55 @@ export function assertVotingManifest(shyconfig) {
       "shyconfig must declare runtime fallback posture rules for voting apps."
     );
   }
+
+  // Claim 56 — operator-separation enforcement.
+  // The RA must be a different legal and operational entity from the canonical ledger operator.
+  // Two symmetric failure modes exist:
+  //   (a) self_hosted: the deployment operator runs the ABCI node. If the same entity also
+  //       runs the RA (ledger_operator), or omits the RA declaration, the chain collapses.
+  //       Valid RA operators: 'shyware' or 'independent_third_party'.
+  //   (b) community/hosted_dedicated: Shyware runs the canonical ledger. If Shyware also
+  //       runs the RA ('shyware'), the chain collapses. The RA must be the deployment
+  //       operator ('operator') or a contracted third party ('independent_third_party').
+  const tier = shyconfig.deployment?.deployment_tier;
+  const raOperator = shyconfig.deployment?.reconcile_authority?.operator;
+
+  if (tier === "self_hosted") {
+    if (!raOperator) {
+      throw new Error(
+        "self_hosted voting deployments must declare deployment.reconcile_authority.operator. " +
+        "The RA must be a different entity from the canonical ledger operator (Claim 56). " +
+        "Use 'shyware' (Shyware hosts your RA) or 'independent_third_party'."
+      );
+    }
+    if (raOperator === "ledger_operator" || raOperator === "operator") {
+      throw new Error(
+        `self_hosted voting deployments cannot set reconcile_authority.operator to '${raOperator}'. ` +
+        "The deployment operator is the ledger operator in a BYOL configuration. " +
+        "An entity running both the ABCI node and the RA can join identity_hash → submission_id " +
+        "without any collusion event, eliminating anonymity-to-operator. " +
+        "Use 'shyware' or 'independent_third_party'."
+      );
+    }
+  }
+
+  if (tier === "community" || tier === "hosted_dedicated") {
+    if (raOperator === "shyware") {
+      throw new Error(
+        `${tier} voting deployments cannot set reconcile_authority.operator to 'shyware'. ` +
+        "Shyware is the canonical ledger operator in this tier. " +
+        "An entity running both the canonical chain and the RA can join identity_hash → submission_id " +
+        "without any collusion event, eliminating anonymity-to-operator. " +
+        "Use 'operator' (you run your own RA) or 'independent_third_party'."
+      );
+    }
+    if (raOperator === "ledger_operator") {
+      throw new Error(
+        `${tier} voting deployments cannot set reconcile_authority.operator to 'ledger_operator'. ` +
+        "Use 'operator' or 'independent_third_party'."
+      );
+    }
+  }
 }
 
 export function createVotingClient({
@@ -643,12 +692,16 @@ export function createVotingClient({
   return {
     initialize() {
       const posture = resolveEffectivePosture(manifest, runtimeSignals);
+      const ra = manifest?.deployment?.reconcile_authority ?? null;
       return {
         contractVersion: manifest?.contract_version ?? null,
         appId: manifest?.app?.id ?? null,
         chainId: manifest?.app?.chain_id ?? null,
         apiBase: getBase(),
         submitBase: getSubmitBase(),
+        raEndpoint: ra?.endpoint ?? getBase(),
+        raOperator: ra?.operator ?? null,
+        deploymentTier: manifest?.deployment?.deployment_tier ?? null,
         storageKey,
         identity: manifest?.identity ?? null,
         identityProfile: identityResolver.profile,
