@@ -22,7 +22,7 @@ try {
 } catch (_) {}
 
 const COCKROACH_COMPONENT = "cockroach-store";
-const COCKROACH_SCHEMA_VERSION = "2026-06-19.1";
+const COCKROACH_SCHEMA_VERSION = "2026-06-19.2";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS verification_sessions (
@@ -255,6 +255,7 @@ CREATE TABLE IF NOT EXISTS console_deployments (
   contract            TEXT        NOT NULL,
   default_posture     TEXT        NOT NULL DEFAULT 'recoverable',
   deployment_tier     TEXT        NOT NULL DEFAULT 'stack4',
+  ledger_operator     TEXT        NOT NULL DEFAULT 'shyware',
   ra_operator         TEXT        NOT NULL DEFAULT 'operator',
   posture_override    TEXT        NULL,
   posture_reason      TEXT        NULL,
@@ -450,6 +451,23 @@ const cockroachMigrationRegistry = createMigrationRegistry({
       },
       validate: async ({ pool }) => {
         await pool.query("SELECT 1 FROM console_deployments LIMIT 1");
+      }
+    },
+    {
+      id: "cockroach-store:console-ledger-operator-2026-06-19.2",
+      fromVersion: "2026-06-19.1",
+      toVersion: "2026-06-19.2",
+      type: "additive",
+      description: "Add ledger_operator to console deployments.",
+      canAutoRun: true,
+      up: async ({ pool }) => {
+        await pool.query(`
+          ALTER TABLE console_deployments
+            ADD COLUMN IF NOT EXISTS ledger_operator TEXT NOT NULL DEFAULT 'shyware';
+        `);
+      },
+      validate: async ({ pool }) => {
+        await pool.query("SELECT ledger_operator FROM console_deployments LIMIT 1");
       }
     }
   ]
@@ -2141,15 +2159,16 @@ function createCockroachStore({
       await query(
         `INSERT INTO console_deployments (
            operator_uid, id, name, domain, contract,
-           default_posture, deployment_tier, ra_operator,
+           default_posture, deployment_tier, ledger_operator, ra_operator,
            stripe_customer_id, stripe_subscription_id, updated_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
          ON CONFLICT (operator_uid, id) DO UPDATE SET
            name = EXCLUDED.name,
            domain = EXCLUDED.domain,
            contract = EXCLUDED.contract,
            default_posture = EXCLUDED.default_posture,
            deployment_tier = EXCLUDED.deployment_tier,
+           ledger_operator = EXCLUDED.ledger_operator,
            ra_operator = EXCLUDED.ra_operator,
            stripe_customer_id = EXCLUDED.stripe_customer_id,
            stripe_subscription_id = EXCLUDED.stripe_subscription_id,
@@ -2158,6 +2177,7 @@ function createCockroachStore({
           operatorUid, d.id, d.name, d.domain, d.contract,
           d.default_posture ?? "recoverable",
           d.deployment_tier ?? "stack4",
+          d.ledger_operator ?? "shyware",
           d.ra_operator ?? "operator",
           d.stripe_customer_id ?? null,
           d.stripe_subscription_id ?? null,
@@ -2201,6 +2221,7 @@ function mapConsoleDeploymentRow(row) {
     contract: row.contract,
     default_posture: row.default_posture,
     deployment_tier: row.deployment_tier,
+    ledger_operator: row.ledger_operator ?? "shyware",
     ra_operator: row.ra_operator,
     posture: effectivePosture,
     effective_posture: effectivePosture,
