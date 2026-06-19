@@ -2159,14 +2159,13 @@ function createCockroachStore({
       await query(
         `INSERT INTO console_deployments (
            operator_uid, id, name, domain, contract,
-           default_posture, deployment_tier, ledger_operator, ra_operator,
+           deployment_tier, ledger_operator, ra_operator,
            stripe_customer_id, stripe_subscription_id, updated_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
          ON CONFLICT (operator_uid, id) DO UPDATE SET
            name = EXCLUDED.name,
            domain = EXCLUDED.domain,
            contract = EXCLUDED.contract,
-           default_posture = EXCLUDED.default_posture,
            deployment_tier = EXCLUDED.deployment_tier,
            ledger_operator = EXCLUDED.ledger_operator,
            ra_operator = EXCLUDED.ra_operator,
@@ -2175,7 +2174,6 @@ function createCockroachStore({
            updated_at = now()`,
         [
           operatorUid, d.id, d.name, d.domain, d.contract,
-          d.default_posture ?? "recoverable",
           d.deployment_tier ?? "stack4",
           d.ledger_operator ?? "shyware",
           d.ra_operator ?? "operator",
@@ -2213,19 +2211,17 @@ function createCockroachStore({
 }
 
 function mapConsoleDeploymentRow(row) {
-  const effectivePosture = row.posture_override ?? row.default_posture;
+  const effectivePosture = row.posture_override ?? "recoverable";
   return {
     id: row.id,
     name: row.name,
     domain: row.domain,
     contract: row.contract,
-    default_posture: row.default_posture,
     deployment_tier: row.deployment_tier,
     ledger_operator: row.ledger_operator ?? "shyware",
     ra_operator: row.ra_operator,
-    posture: effectivePosture,
     effective_posture: effectivePosture,
-    source: row.posture_override ? "operator" : "manifest",
+    source: row.posture_override ? "operator" : "default",
     posture_updated_at: row.posture_updated_at?.toISOString?.() ?? null,
     posture_reason: row.posture_reason ?? null,
     country_rules: row.country_rules ?? [],
