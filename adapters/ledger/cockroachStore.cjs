@@ -22,7 +22,7 @@ try {
 } catch (_) {}
 
 const COCKROACH_COMPONENT = "cockroach-store";
-const COCKROACH_SCHEMA_VERSION = "2026-06-16.1";
+const COCKROACH_SCHEMA_VERSION = "2026-06-19.1";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS verification_sessions (
@@ -246,6 +246,29 @@ ALTER TABLE scytale_dispatches
 
 ALTER TABLE scytale_receipts
   ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+
+CREATE TABLE IF NOT EXISTS console_deployments (
+  operator_uid        TEXT        NOT NULL,
+  id                  TEXT        NOT NULL,
+  name                TEXT        NOT NULL,
+  domain              TEXT        NOT NULL,
+  contract            TEXT        NOT NULL,
+  default_posture     TEXT        NOT NULL DEFAULT 'recoverable',
+  deployment_tier     TEXT        NOT NULL DEFAULT 'stack4',
+  ra_operator         TEXT        NOT NULL DEFAULT 'operator',
+  posture_override    TEXT        NULL,
+  posture_reason      TEXT        NULL,
+  posture_updated_at  TIMESTAMPTZ NULL,
+  posture_updated_by  TEXT        NULL,
+  country_rules       JSONB       NOT NULL DEFAULT '[]'::jsonb,
+  country_rules_updated_at TIMESTAMPTZ NULL,
+  country_rules_updated_by TEXT   NULL,
+  stripe_customer_id  TEXT        NULL,
+  stripe_subscription_id TEXT     NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (operator_uid, id)
+);
 `;
 
 const MIGRATION_STATE_SQL = `
@@ -380,9 +403,9 @@ const cockroachMigrationRegistry = createMigrationRegistry({
     {
       id: "cockroach-store:bootstrap-2026-06-16.1",
       fromVersion: UNINITIALIZED_VERSION,
-      toVersion: COCKROACH_SCHEMA_VERSION,
+      toVersion: "2026-06-16.1",
       type: "additive",
-      description: "Create or repair the current Shyware CockroachDB schema.",
+      description: "Create or repair the core Shyware CockroachDB schema.",
       canAutoRun: true,
       up: async ({ pool }) => {
         await pool.query(SCHEMA_SQL);
@@ -390,6 +413,43 @@ const cockroachMigrationRegistry = createMigrationRegistry({
       validate: async ({ pool }) => {
         await pool.query("SELECT 1 FROM vote_receipts LIMIT 1");
         await pool.query("SELECT 1 FROM scytale_mailboxes LIMIT 1");
+      }
+    },
+    {
+      id: "cockroach-store:console-deployments-2026-06-19.1",
+      fromVersion: "2026-06-16.1",
+      toVersion: "2026-06-19.1",
+      type: "additive",
+      description: "Add console_deployments table for operator-scoped deployment registry.",
+      canAutoRun: true,
+      up: async ({ pool }) => {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS console_deployments (
+            operator_uid        TEXT        NOT NULL,
+            id                  TEXT        NOT NULL,
+            name                TEXT        NOT NULL,
+            domain              TEXT        NOT NULL,
+            contract            TEXT        NOT NULL,
+            default_posture     TEXT        NOT NULL DEFAULT 'recoverable',
+            deployment_tier     TEXT        NOT NULL DEFAULT 'stack4',
+            ra_operator         TEXT        NOT NULL DEFAULT 'operator',
+            posture_override    TEXT        NULL,
+            posture_reason      TEXT        NULL,
+            posture_updated_at  TIMESTAMPTZ NULL,
+            posture_updated_by  TEXT        NULL,
+            country_rules       JSONB       NOT NULL DEFAULT '[]'::jsonb,
+            country_rules_updated_at TIMESTAMPTZ NULL,
+            country_rules_updated_by TEXT   NULL,
+            stripe_customer_id  TEXT        NULL,
+            stripe_subscription_id TEXT     NULL,
+            created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (operator_uid, id)
+          );
+        `);
+      },
+      validate: async ({ pool }) => {
+        await pool.query("SELECT 1 FROM console_deployments LIMIT 1");
       }
     }
   ]
@@ -2065,7 +2125,91 @@ function createCockroachStore({
         contentClass: row.content_class,
         timestamp: row.timestamp,
       }));
-    }
+    },
+
+    // ── Console deployment registry ────────────────────────────────────────────
+
+    async getConsoleDeployments(operatorUid) {
+      const result = await query(
+        `SELECT * FROM console_deployments WHERE operator_uid = $1 ORDER BY created_at ASC`,
+        [operatorUid]
+      );
+      return result.rows.map(mapConsoleDeploymentRow);
+    },
+
+    async upsertConsoleDeployment(operatorUid, d) {
+      await query(
+        `INSERT INTO console_deployments (
+           operator_uid, id, name, domain, contract,
+           default_posture, deployment_tier, ra_operator,
+           stripe_customer_id, stripe_subscription_id, updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
+         ON CONFLICT (operator_uid, id) DO UPDATE SET
+           name = EXCLUDED.name,
+           domain = EXCLUDED.domain,
+           contract = EXCLUDED.contract,
+           default_posture = EXCLUDED.default_posture,
+           deployment_tier = EXCLUDED.deployment_tier,
+           ra_operator = EXCLUDED.ra_operator,
+           stripe_customer_id = EXCLUDED.stripe_customer_id,
+           stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+           updated_at = now()`,
+        [
+          operatorUid, d.id, d.name, d.domain, d.contract,
+          d.default_posture ?? "recoverable",
+          d.deployment_tier ?? "stack4",
+          d.ra_operator ?? "operator",
+          d.stripe_customer_id ?? null,
+          d.stripe_subscription_id ?? null,
+        ]
+      );
+    },
+
+    async updateConsoleDeploymentPosture(operatorUid, id, { posture, reason, updatedBy }) {
+      await query(
+        `UPDATE console_deployments
+            SET posture_override = $3,
+                posture_reason = $4,
+                posture_updated_at = now(),
+                posture_updated_by = $5,
+                updated_at = now()
+          WHERE operator_uid = $1 AND id = $2`,
+        [operatorUid, id, posture ?? null, reason ?? null, updatedBy ?? null]
+      );
+    },
+
+    async updateConsoleDeploymentCountryRules(operatorUid, id, { rules, updatedBy }) {
+      await query(
+        `UPDATE console_deployments
+            SET country_rules = $3::jsonb,
+                country_rules_updated_at = now(),
+                country_rules_updated_by = $4,
+                updated_at = now()
+          WHERE operator_uid = $1 AND id = $2`,
+        [operatorUid, id, JSON.stringify(rules ?? []), updatedBy ?? null]
+      );
+    },
+  };
+}
+
+function mapConsoleDeploymentRow(row) {
+  const effectivePosture = row.posture_override ?? row.default_posture;
+  return {
+    id: row.id,
+    name: row.name,
+    domain: row.domain,
+    contract: row.contract,
+    default_posture: row.default_posture,
+    deployment_tier: row.deployment_tier,
+    ra_operator: row.ra_operator,
+    posture: effectivePosture,
+    effective_posture: effectivePosture,
+    source: row.posture_override ? "operator" : "manifest",
+    posture_updated_at: row.posture_updated_at?.toISOString?.() ?? null,
+    posture_reason: row.posture_reason ?? null,
+    country_rules: row.country_rules ?? [],
+    stripe_customer_id: row.stripe_customer_id ?? null,
+    stripe_subscription_id: row.stripe_subscription_id ?? null,
   };
 }
 
