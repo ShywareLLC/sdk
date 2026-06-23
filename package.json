@@ -1,6 +1,6 @@
 {
   "name": "@shyware/sdk",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "description": "Structurally anonymous distributed-ledger protocol SDK. Non-linkability by write architecture — not policy.",
   "type": "module",
   "main": "./index.js",
