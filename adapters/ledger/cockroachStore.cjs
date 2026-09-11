@@ -22,7 +22,7 @@ try {
 } catch (_) {}
 
 const COCKROACH_COMPONENT = "cockroach-store";
-const COCKROACH_SCHEMA_VERSION = "2026-08-31.3";
+const COCKROACH_SCHEMA_VERSION = "2026-08-31.4";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS verification_sessions (
@@ -843,6 +843,45 @@ const cockroachMigrationRegistry = createMigrationRegistry({
       validate: async ({ pool }) => {
         await pool.query("SELECT 1 FROM permission_batches LIMIT 1");
       }
+    },
+    {
+      id: "cockroach-store:populist-forum-interactions-2026-08-31.4",
+      fromVersion: "2026-08-31.3",
+      toVersion: "2026-08-31.4",
+      type: "additive",
+      description:
+        "Add forum_comments and forum_reports tables -- forum_posts already carries like_count/liked_by for likes, but had no comment storage at all (comment_count existed with nothing to back it), and no report/flag path existed anywhere.",
+      canAutoRun: true,
+      up: async ({ pool }) => {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS forum_comments (
+            comment_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+            post_id TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            author_name TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE INDEX IF NOT EXISTS forum_comments_post_idx
+            ON forum_comments (post_id, created_at ASC);
+
+          CREATE TABLE IF NOT EXISTS forum_reports (
+            report_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+            post_id TEXT NOT NULL,
+            reporter_id TEXT NOT NULL,
+            reason TEXT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE INDEX IF NOT EXISTS forum_reports_post_idx
+            ON forum_reports (post_id, created_at DESC);
+        `);
+      },
+      validate: async ({ pool }) => {
+        await pool.query("SELECT 1 FROM forum_comments LIMIT 1");
+        await pool.query("SELECT 1 FROM forum_reports LIMIT 1");
+      }
     }
   ]
 });
@@ -1092,6 +1131,18 @@ function mapForumPostRow(row) {
     likedBy: row.liked_by || [],
     permissionKitPostId: row.permission_kit_post_id,
     isSample: row.is_sample,
+    createdAt: normalizeTimestamp(row.created_at)
+  };
+}
+
+function mapForumCommentRow(row) {
+  if (!row) return null;
+  return {
+    commentId: row.comment_id,
+    postId: row.post_id,
+    authorId: row.author_id,
+    authorName: row.author_name,
+    content: row.content,
     createdAt: normalizeTimestamp(row.created_at)
   };
 }
@@ -2164,15 +2215,123 @@ function createCockroachStore({
       );
       return mapForumPostRow(result.rows[0]);
     },
-    async listForumPosts({ limit = 50, billId = null, organizationId = null } = {}) {
+    async listForumPosts({ limit = 50, offset = 0, billId = null, organizationId = null } = {}) {
       const result = await query(
         `SELECT * FROM forum_posts
-         WHERE ($2::text IS NULL OR bill_id = $2)
-           AND ($3::text IS NULL OR organization_id = $3)
-         ORDER BY created_at DESC LIMIT $1`,
-        [limit, billId, organizationId]
+         WHERE ($3::text IS NULL OR bill_id = $3)
+           AND ($4::text IS NULL OR organization_id = $4)
+         ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+        [limit, offset, billId, organizationId]
       );
       return result.rows.map(mapForumPostRow);
+    },
+    async getForumPost(postId) {
+      const result = await query(`SELECT * FROM forum_posts WHERE post_id = $1`, [postId]);
+      return mapForumPostRow(result.rows[0]);
+    },
+    async getUserForumPosts(userId, limit = 50) {
+      const result = await query(
+        `SELECT * FROM forum_posts WHERE author_id = $1 ORDER BY created_at DESC LIMIT $2`,
+        [userId, limit]
+      );
+      return result.rows.map(mapForumPostRow);
+    },
+    async deleteForumPost(postId, authorId) {
+      const result = await query(
+        `DELETE FROM forum_posts WHERE post_id = $1 AND author_id = $2 RETURNING post_id`,
+        [postId, authorId]
+      );
+      return result.rows.length > 0;
+    },
+    // Likes live directly on forum_posts (liked_by/like_count) rather than
+    // a separate table -- that schema was already there from the initial
+    // migration, just never wired to any route. jsonb_build_array/@> keep
+    // the like idempotent (liking twice, or unliking when not liked, are
+    // both harmless no-ops) without a round trip to check first.
+    async likeForumPost(postId, userId) {
+      const result = await query(
+        `UPDATE forum_posts
+         SET liked_by = CASE WHEN liked_by @> to_jsonb($2::text)
+               THEN liked_by
+               ELSE liked_by || to_jsonb($2::text)
+             END,
+             like_count = CASE WHEN liked_by @> to_jsonb($2::text)
+               THEN like_count
+               ELSE like_count + 1
+             END
+         WHERE post_id = $1
+         RETURNING *`,
+        [postId, userId]
+      );
+      return mapForumPostRow(result.rows[0]);
+    },
+    async unlikeForumPost(postId, userId) {
+      const result = await query(
+        `UPDATE forum_posts
+         SET liked_by = (
+               SELECT COALESCE(jsonb_agg(elem), '[]'::jsonb)
+               FROM jsonb_array_elements(liked_by) elem
+               WHERE elem != to_jsonb($2::text)
+             ),
+             like_count = GREATEST(0, like_count - CASE WHEN liked_by @> to_jsonb($2::text) THEN 1 ELSE 0 END)
+         WHERE post_id = $1
+         RETURNING *`,
+        [postId, userId]
+      );
+      return mapForumPostRow(result.rows[0]);
+    },
+    async isForumPostLiked(postId, userId) {
+      const result = await query(
+        `SELECT liked_by @> to_jsonb($2::text) AS liked FROM forum_posts WHERE post_id = $1`,
+        [postId, userId]
+      );
+      return result.rows[0]?.liked === true;
+    },
+    async addForumComment({ postId, authorId, authorName, content }) {
+      const result = await query(
+        `WITH inserted AS (
+           INSERT INTO forum_comments (comment_id, post_id, author_id, author_name, content)
+           VALUES (gen_random_uuid()::text, $1, $2, $3, $4)
+           RETURNING *
+         ),
+         bump AS (
+           UPDATE forum_posts SET comment_count = comment_count + 1 WHERE post_id = $1
+         )
+         SELECT * FROM inserted`,
+        [postId, authorId, authorName, content]
+      );
+      return mapForumCommentRow(result.rows[0]);
+    },
+    async getForumComments(postId, limit = 50) {
+      const result = await query(
+        `SELECT * FROM forum_comments WHERE post_id = $1 ORDER BY created_at ASC LIMIT $2`,
+        [postId, limit]
+      );
+      return result.rows.map(mapForumCommentRow);
+    },
+    async deleteForumComment(postId, commentId, authorId) {
+      const result = await query(
+        `WITH deleted AS (
+           DELETE FROM forum_comments
+           WHERE comment_id = $1 AND post_id = $2 AND author_id = $3
+           RETURNING comment_id
+         ),
+         bump AS (
+           UPDATE forum_posts SET comment_count = GREATEST(0, comment_count - 1)
+           WHERE post_id = $2 AND EXISTS (SELECT 1 FROM deleted)
+         )
+         SELECT * FROM deleted`,
+        [commentId, postId, authorId]
+      );
+      return result.rows.length > 0;
+    },
+    async reportForumPost({ postId, reporterId, reason = null }) {
+      await query(
+        `INSERT INTO forum_reports (report_id, post_id, reporter_id, reason)
+         VALUES (gen_random_uuid()::text, $1, $2, $3)`,
+        [postId, reporterId, reason]
+      );
+      return true;
     },
 
     async createEvent({
