@@ -1223,7 +1223,8 @@ function mapEventRow(row) {
     attendeeCount: toInt(row.attendee_count),
     isSample: row.is_sample,
     createdAt: normalizeTimestamp(row.created_at),
-    updatedAt: normalizeTimestamp(row.updated_at)
+    updatedAt: normalizeTimestamp(row.updated_at),
+    ...(row.distance_km != null ? { distanceKm: Number(row.distance_km) } : {})
   };
 }
 
@@ -2543,12 +2544,48 @@ function createCockroachStore({
       ]);
       return mapEventRow(result.rows[0] || null);
     },
-    async listUpcomingEvents(limit = 50) {
+    async listUpcomingEvents(limit = 50, { lat = null, lng = null, radiusKm = null } = {}) {
+      if (lat != null && lng != null && radiusKm != null) {
+        // Haversine distance in km against the plain lat/lng columns --
+        // no PostGIS/GEOGRAPHY column exists yet, and a simple great-circle
+        // formula is sufficient for a radius filter at this scale. Scored
+        // in a CTE so the filter/sort can reference distance_km directly.
+        const result = await query(
+          `WITH scored AS (
+             SELECT *,
+               6371 * acos(
+                 LEAST(1, GREATEST(-1,
+                   cos(radians($2)) * cos(radians(latitude)) * cos(radians(longitude) - radians($3)) +
+                   sin(radians($2)) * sin(radians(latitude))
+                 ))
+               ) AS distance_km
+             FROM events
+             WHERE start_date > now()
+           )
+           SELECT * FROM scored WHERE distance_km <= $4 ORDER BY distance_km ASC LIMIT $1`,
+          [limit, lat, lng, radiusKm]
+        );
+        return result.rows.map(mapEventRow);
+      }
       const result = await query(
         `SELECT * FROM events WHERE start_date > now() ORDER BY start_date ASC LIMIT $1`,
         [limit]
       );
       return result.rows.map(mapEventRow);
+    },
+    async listEventAttendees(eventId, limit = 100) {
+      const result = await query(
+        `SELECT user_id FROM event_attendees WHERE event_id = $1 ORDER BY joined_at ASC LIMIT $2`,
+        [eventId, limit]
+      );
+      return result.rows.map((r) => r.user_id);
+    },
+    async isEventAttendee(eventId, userId) {
+      const result = await query(
+        `SELECT 1 FROM event_attendees WHERE event_id = $1 AND user_id = $2`,
+        [eventId, userId]
+      );
+      return result.rows.length > 0;
     },
     async addEventAttendee(eventId, userId) {
       const result = await query(
