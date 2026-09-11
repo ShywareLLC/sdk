@@ -2265,41 +2265,27 @@ function createCockroachStore({
       );
       return result.rows.length > 0;
     },
-    // Reactions live as {emoji: [userId, ...]} directly on the message row.
-    // Containment (@>) keeps add/remove idempotent, matching the forum
-    // like/unlike pattern on forum_posts.liked_by.
+    // Reactions live as {userId: emoji} directly on the message row -- one
+    // reaction per user per message (matching FirestoreChatMessage's
+    // existing `reactions: [String: String] // userId: emoji` shape).
+    // Reacting again just overwrites the caller's own key.
     async reactToOrganizationMessage(messageId, userId, emoji) {
       const result = await query(
         `UPDATE organization_messages
-         SET reactions = jsonb_set(
-           reactions,
-           ARRAY[$3],
-           CASE WHEN COALESCE(reactions->$3, '[]'::jsonb) @> to_jsonb($2::text)
-             THEN COALESCE(reactions->$3, '[]'::jsonb)
-             ELSE COALESCE(reactions->$3, '[]'::jsonb) || to_jsonb($2::text)
-           END
-         )
+         SET reactions = jsonb_set(reactions, ARRAY[$2], to_jsonb($3::text))
          WHERE message_id = $1
          RETURNING *`,
         [messageId, userId, emoji]
       );
       return mapOrganizationMessageRow(result.rows[0] || null);
     },
-    async removeReactionFromOrganizationMessage(messageId, userId, emoji) {
+    async removeReactionFromOrganizationMessage(messageId, userId) {
       const result = await query(
         `UPDATE organization_messages
-         SET reactions = jsonb_set(
-           reactions,
-           ARRAY[$3],
-           COALESCE(
-             (SELECT jsonb_agg(elem) FROM jsonb_array_elements(COALESCE(reactions->$3, '[]'::jsonb)) elem
-              WHERE elem != to_jsonb($2::text)),
-             '[]'::jsonb
-           )
-         )
+         SET reactions = reactions - $2::text
          WHERE message_id = $1
          RETURNING *`,
-        [messageId, userId, emoji]
+        [messageId, userId]
       );
       return mapOrganizationMessageRow(result.rows[0] || null);
     },
@@ -2341,6 +2327,16 @@ function createCockroachStore({
       const result = await query(
         `SELECT * FROM organizations ORDER BY created_at DESC LIMIT $1`,
         [limit]
+      );
+      return result.rows.map(mapOrganizationRow);
+    },
+    async listOrganizationsForUser(userId, limit = 100) {
+      const result = await query(
+        `SELECT o.* FROM organizations o
+         JOIN organization_members m ON m.organization_id = o.organization_id
+         WHERE m.user_id = $1
+         ORDER BY o.created_at DESC LIMIT $2`,
+        [userId, limit]
       );
       return result.rows.map(mapOrganizationRow);
     },
