@@ -22,7 +22,7 @@ try {
 } catch (_) {}
 
 const COCKROACH_COMPONENT = "cockroach-store";
-const COCKROACH_SCHEMA_VERSION = "2026-06-19.2";
+const COCKROACH_SCHEMA_VERSION = "2026-08-31.3";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS verification_sessions (
@@ -270,6 +270,83 @@ CREATE TABLE IF NOT EXISTS console_deployments (
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (operator_uid, id)
 );
+
+CREATE TABLE IF NOT EXISTS devices (
+  device_id TEXT PRIMARY KEY,
+  public_key TEXT NULL,
+  counter INT NOT NULL DEFAULT 0,
+  bundle_id TEXT NULL,
+  service TEXT NULL,
+  platform TEXT NULL,
+  encrypted_key TEXT NULL,
+  iv TEXT NULL,
+  auth_tag TEXT NULL,
+  key_version TEXT NULL,
+  revoked BOOLEAN NOT NULL DEFAULT false,
+  request_count INT NOT NULL DEFAULT 0,
+  ip_address TEXT NULL,
+  registered_at TIMESTAMPTZ NULL,
+  issued_at TIMESTAMPTZ NULL,
+  last_seen TIMESTAMPTZ NULL,
+  last_used TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  user_id TEXT PRIMARY KEY,
+  email TEXT NULL,
+  digit_verification_status TEXT NULL,
+  age_range TEXT NULL,
+  political_party TEXT NULL,
+  state TEXT NULL,
+  employment_expertise TEXT NULL,
+  education_expertise TEXT NULL,
+  hobby_expertise TEXT NULL,
+  parent_phone TEXT NULL,
+  profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  verified_at TIMESTAMPTZ NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS user_votes (
+  user_id TEXT NOT NULL,
+  bill_id TEXT NOT NULL,
+  vote TEXT NOT NULL,
+  bill_committees JSONB NOT NULL DEFAULT '[]'::jsonb,
+  state TEXT NULL,
+  age_range TEXT NULL,
+  employment_expertise TEXT NULL,
+  education_expertise TEXT NULL,
+  hobby_expertise TEXT NULL,
+  political_party TEXT NULL,
+  verified BOOLEAN NOT NULL DEFAULT false,
+  verified_age INT NULL,
+  counted_in_results BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, bill_id)
+);
+
+CREATE INDEX IF NOT EXISTS user_votes_bill_id_idx ON user_votes (bill_id);
+
+CREATE TABLE IF NOT EXISTS bill_votes (
+  bill_id TEXT PRIMARY KEY,
+  support_count INT NOT NULL DEFAULT 0,
+  oppose_count INT NOT NULL DEFAULT 0,
+  total_votes INT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS user_bookmarks (
+  user_id TEXT NOT NULL,
+  bill_id TEXT NOT NULL,
+  bill_number TEXT NULL,
+  title TEXT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, bill_id)
+);
 `;
 
 const MIGRATION_STATE_SQL = `
@@ -469,6 +546,303 @@ const cockroachMigrationRegistry = createMigrationRegistry({
       validate: async ({ pool }) => {
         await pool.query("SELECT ledger_operator FROM console_deployments LIMIT 1");
       }
+    },
+    {
+      id: "cockroach-store:populist-core-2026-08-30.1",
+      fromVersion: "2026-06-19.2",
+      toVersion: "2026-08-30.1",
+      type: "additive",
+      description:
+        "Add devices, users, user_votes, bill_votes, user_bookmarks tables (Populist Firestore migration, Stage 1).",
+      canAutoRun: true,
+      up: async ({ pool }) => {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS devices (
+            device_id TEXT PRIMARY KEY,
+            public_key TEXT NULL,
+            counter INT NOT NULL DEFAULT 0,
+            bundle_id TEXT NULL,
+            service TEXT NULL,
+            platform TEXT NULL,
+            encrypted_key TEXT NULL,
+            iv TEXT NULL,
+            auth_tag TEXT NULL,
+            key_version TEXT NULL,
+            revoked BOOLEAN NOT NULL DEFAULT false,
+            request_count INT NOT NULL DEFAULT 0,
+            ip_address TEXT NULL,
+            registered_at TIMESTAMPTZ NULL,
+            issued_at TIMESTAMPTZ NULL,
+            last_seen TIMESTAMPTZ NULL,
+            last_used TIMESTAMPTZ NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            email TEXT NULL,
+            digit_verification_status TEXT NULL,
+            age_range TEXT NULL,
+            political_party TEXT NULL,
+            state TEXT NULL,
+            employment_expertise TEXT NULL,
+            education_expertise TEXT NULL,
+            hobby_expertise TEXT NULL,
+            parent_phone TEXT NULL,
+            profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            verified_at TIMESTAMPTZ NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE TABLE IF NOT EXISTS user_votes (
+            user_id TEXT NOT NULL,
+            bill_id TEXT NOT NULL,
+            vote TEXT NOT NULL,
+            bill_committees JSONB NOT NULL DEFAULT '[]'::jsonb,
+            state TEXT NULL,
+            age_range TEXT NULL,
+            employment_expertise TEXT NULL,
+            education_expertise TEXT NULL,
+            hobby_expertise TEXT NULL,
+            political_party TEXT NULL,
+            verified BOOLEAN NOT NULL DEFAULT false,
+            verified_age INT NULL,
+            counted_in_results BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (user_id, bill_id)
+          );
+
+          CREATE INDEX IF NOT EXISTS user_votes_bill_id_idx ON user_votes (bill_id);
+
+          CREATE TABLE IF NOT EXISTS bill_votes (
+            bill_id TEXT PRIMARY KEY,
+            support_count INT NOT NULL DEFAULT 0,
+            oppose_count INT NOT NULL DEFAULT 0,
+            total_votes INT NOT NULL DEFAULT 0,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE TABLE IF NOT EXISTS user_bookmarks (
+            user_id TEXT NOT NULL,
+            bill_id TEXT NOT NULL,
+            bill_number TEXT NULL,
+            title TEXT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (user_id, bill_id)
+          );
+        `);
+      },
+      validate: async ({ pool }) => {
+        await pool.query("SELECT 1 FROM devices LIMIT 1");
+        await pool.query("SELECT 1 FROM users LIMIT 1");
+        await pool.query("SELECT 1 FROM user_votes LIMIT 1");
+        await pool.query("SELECT 1 FROM bill_votes LIMIT 1");
+        await pool.query("SELECT 1 FROM user_bookmarks LIMIT 1");
+      }
+    },
+    {
+      id: "cockroach-store:devices-revocation-metadata-2026-08-30.2",
+      fromVersion: "2026-08-30.1",
+      toVersion: "2026-08-30.2",
+      type: "additive",
+      description: "Add revocation metadata columns to devices.",
+      canAutoRun: true,
+      up: async ({ pool }) => {
+        await pool.query(`
+          ALTER TABLE devices ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ NULL;
+          ALTER TABLE devices ADD COLUMN IF NOT EXISTS revoked_reason TEXT NULL;
+          ALTER TABLE devices ADD COLUMN IF NOT EXISTS revoked_by TEXT NULL;
+        `);
+      },
+      validate: async ({ pool }) => {
+        await pool.query("SELECT revoked_at, revoked_reason, revoked_by FROM devices LIMIT 1");
+      }
+    },
+    {
+      id: "cockroach-store:populist-marketplace-2026-08-31.1",
+      fromVersion: "2026-08-30.2",
+      toVersion: "2026-08-31.1",
+      type: "additive",
+      description:
+        "Add registered_campaigns, user_solicitation_prefs, contact_transactions tables (Populist Firestore migration, Stage 2).",
+      canAutoRun: true,
+      up: async ({ pool }) => {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS registered_campaigns (
+            campaign_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+            created_by TEXT NOT NULL,
+            name TEXT NOT NULL,
+            org_name TEXT NOT NULL,
+            agreed_to_tos_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            tos_version TEXT NOT NULL DEFAULT '1.0',
+            stripe_customer_id TEXT NULL,
+            active BOOLEAN NOT NULL DEFAULT true,
+            contacts_used_this_month INT NOT NULL DEFAULT 0,
+            monthly_contact_limit INT NOT NULL DEFAULT 1000,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE INDEX IF NOT EXISTS registered_campaigns_created_by_idx
+            ON registered_campaigns (created_by);
+
+          CREATE TABLE IF NOT EXISTS user_solicitation_prefs (
+            user_id TEXT PRIMARY KEY,
+            opted_in BOOLEAN NOT NULL DEFAULT false,
+            share_email BOOLEAN NOT NULL DEFAULT false,
+            share_phone BOOLEAN NOT NULL DEFAULT false,
+            share_address BOOLEAN NOT NULL DEFAULT false,
+            price_per_contact_cents INT NOT NULL DEFAULT 50,
+            consent_version TEXT NULL,
+            total_earnings_cents INT NOT NULL DEFAULT 0,
+            stripe_connect_account_id TEXT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE INDEX IF NOT EXISTS user_solicitation_prefs_opted_in_idx
+            ON user_solicitation_prefs (opted_in);
+
+          CREATE TABLE IF NOT EXISTS contact_transactions (
+            transaction_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+            campaign_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            contacted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            fields_shared JSONB NOT NULL DEFAULT '[]'::jsonb,
+            gross_cents INT NOT NULL DEFAULT 0,
+            platform_fee_cents INT NOT NULL DEFAULT 0,
+            user_earnings_cents INT NOT NULL DEFAULT 0,
+            stripe_payment_intent_id TEXT NULL,
+            stripe_transfer_id TEXT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS contact_transactions_pi_idx
+            ON contact_transactions (stripe_payment_intent_id);
+
+          CREATE INDEX IF NOT EXISTS contact_transactions_campaign_idx
+            ON contact_transactions (campaign_id);
+        `);
+      },
+      validate: async ({ pool }) => {
+        await pool.query("SELECT 1 FROM registered_campaigns LIMIT 1");
+        await pool.query("SELECT 1 FROM user_solicitation_prefs LIMIT 1");
+        await pool.query("SELECT 1 FROM contact_transactions LIMIT 1");
+      }
+    },
+    {
+      id: "cockroach-store:populist-social-2026-08-31.2",
+      fromVersion: "2026-08-31.1",
+      toVersion: "2026-08-31.2",
+      type: "additive",
+      description:
+        "Add organization_messages, forum_posts, events, event_attendees tables (Populist Firestore migration, Stage 3).",
+      canAutoRun: true,
+      up: async ({ pool }) => {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS organization_messages (
+            message_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+            organization_id TEXT NOT NULL,
+            author_id TEXT NOT NULL,
+            author_name TEXT NOT NULL,
+            content TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'text',
+            reactions JSONB NOT NULL DEFAULT '{}'::jsonb,
+            permission_kit_message_id TEXT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE INDEX IF NOT EXISTS organization_messages_org_idx
+            ON organization_messages (organization_id, created_at DESC);
+
+          CREATE TABLE IF NOT EXISTS forum_posts (
+            post_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+            author_id TEXT NOT NULL,
+            author_name TEXT NOT NULL,
+            content TEXT NOT NULL,
+            bill_id TEXT NULL,
+            organization_id TEXT NULL,
+            like_count INT NOT NULL DEFAULT 0,
+            comment_count INT NOT NULL DEFAULT 0,
+            liked_by JSONB NOT NULL DEFAULT '[]'::jsonb,
+            permission_kit_post_id TEXT NULL,
+            is_sample BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE INDEX IF NOT EXISTS forum_posts_created_idx
+            ON forum_posts (created_at DESC);
+          CREATE INDEX IF NOT EXISTS forum_posts_bill_idx
+            ON forum_posts (bill_id);
+          CREATE INDEX IF NOT EXISTS forum_posts_org_idx
+            ON forum_posts (organization_id);
+
+          CREATE TABLE IF NOT EXISTS events (
+            event_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+            title TEXT NOT NULL,
+            latitude DOUBLE PRECISION NOT NULL,
+            longitude DOUBLE PRECISION NOT NULL,
+            address TEXT NOT NULL,
+            start_date TIMESTAMPTZ NOT NULL,
+            end_date TIMESTAMPTZ NOT NULL,
+            description TEXT NULL,
+            created_by TEXT NOT NULL,
+            organization_id TEXT NULL,
+            attendee_count INT NOT NULL DEFAULT 0,
+            is_sample BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE INDEX IF NOT EXISTS events_start_date_idx
+            ON events (start_date ASC);
+          CREATE INDEX IF NOT EXISTS events_org_idx
+            ON events (organization_id);
+
+          CREATE TABLE IF NOT EXISTS event_attendees (
+            event_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (event_id, user_id)
+          );
+        `);
+      },
+      validate: async ({ pool }) => {
+        await pool.query("SELECT 1 FROM organization_messages LIMIT 1");
+        await pool.query("SELECT 1 FROM forum_posts LIMIT 1");
+        await pool.query("SELECT 1 FROM events LIMIT 1");
+        await pool.query("SELECT 1 FROM event_attendees LIMIT 1");
+      }
+    },
+    {
+      id: "cockroach-store:populist-permission-batches-2026-08-31.3",
+      fromVersion: "2026-08-31.2",
+      toVersion: "2026-08-31.3",
+      type: "additive",
+      description:
+        "Add permission_batches table (Populist Firestore migration, Stage 4).",
+      canAutoRun: true,
+      up: async ({ pool }) => {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS permission_batches (
+            batch_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            posts JSONB NOT NULL DEFAULT '[]'::jsonb,
+            messages JSONB NOT NULL DEFAULT '[]'::jsonb,
+            processed_at TIMESTAMPTZ NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE INDEX IF NOT EXISTS permission_batches_user_idx
+            ON permission_batches (user_id, created_at DESC);
+        `);
+      },
+      validate: async ({ pool }) => {
+        await pool.query("SELECT 1 FROM permission_batches LIMIT 1");
+      }
     }
   ]
 });
@@ -523,6 +897,12 @@ function trimString(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function toInt(value, fallback = 0) {
+  if (value === null || value === undefined) return fallback;
+  const n = typeof value === "number" ? value : parseInt(value, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function mapVerificationSessionRow(row) {
   if (!row) return null;
   return {
@@ -536,6 +916,216 @@ function mapVerificationSessionRow(row) {
     decision: row.decision || null,
     createdAt: normalizeTimestamp(row.created_at),
     updatedAt: normalizeTimestamp(row.updated_at)
+  };
+}
+
+function mapDeviceRow(row) {
+  if (!row) return null;
+  return {
+    deviceId: row.device_id,
+    publicKey: row.public_key,
+    counter: toInt(row.counter),
+    bundleId: row.bundle_id,
+    service: row.service,
+    platform: row.platform,
+    encryptedKey: row.encrypted_key,
+    iv: row.iv,
+    authTag: row.auth_tag,
+    keyVersion: row.key_version,
+    revoked: row.revoked,
+    revokedAt: normalizeTimestamp(row.revoked_at),
+    revokedReason: row.revoked_reason,
+    revokedBy: row.revoked_by,
+    requestCount: toInt(row.request_count),
+    ipAddress: row.ip_address,
+    registeredAt: normalizeTimestamp(row.registered_at),
+    issuedAt: normalizeTimestamp(row.issued_at),
+    lastSeen: normalizeTimestamp(row.last_seen),
+    lastUsed: normalizeTimestamp(row.last_used),
+    createdAt: normalizeTimestamp(row.created_at),
+    updatedAt: normalizeTimestamp(row.updated_at)
+  };
+}
+
+function mapUserRow(row) {
+  if (!row) return null;
+  return {
+    ...(row.profile || {}),
+    userId: row.user_id,
+    email: row.email,
+    digitVerificationStatus: row.digit_verification_status,
+    ageRange: row.age_range,
+    politicalParty: row.political_party,
+    state: row.state,
+    employmentExpertise: row.employment_expertise,
+    educationExpertise: row.education_expertise,
+    hobbyExpertise: row.hobby_expertise,
+    parentPhone: row.parent_phone,
+    createdAt: normalizeTimestamp(row.created_at),
+    verifiedAt: normalizeTimestamp(row.verified_at),
+    updatedAt: normalizeTimestamp(row.updated_at)
+  };
+}
+
+function mapUserVoteRow(row) {
+  if (!row) return null;
+  return {
+    userId: row.user_id,
+    billId: row.bill_id,
+    vote: row.vote,
+    billCommittees: row.bill_committees || [],
+    state: row.state,
+    ageRange: row.age_range,
+    employmentExpertise: row.employment_expertise,
+    educationExpertise: row.education_expertise,
+    hobbyExpertise: row.hobby_expertise,
+    politicalParty: row.political_party,
+    verified: row.verified,
+    verifiedAge: row.verified_age === null ? null : toInt(row.verified_age),
+    countedInResults: row.counted_in_results,
+    createdAt: normalizeTimestamp(row.created_at),
+    updatedAt: normalizeTimestamp(row.updated_at)
+  };
+}
+
+function mapBillVotesRow(row) {
+  if (!row) {
+    return { billId: null, supportCount: 0, opposeCount: 0, totalVotes: 0, updatedAt: null };
+  }
+  return {
+    billId: row.bill_id,
+    supportCount: toInt(row.support_count),
+    opposeCount: toInt(row.oppose_count),
+    totalVotes: toInt(row.total_votes),
+    updatedAt: normalizeTimestamp(row.updated_at)
+  };
+}
+
+function mapUserBookmarkRow(row) {
+  if (!row) return null;
+  return {
+    userId: row.user_id,
+    billId: row.bill_id,
+    billNumber: row.bill_number,
+    title: row.title,
+    createdAt: normalizeTimestamp(row.created_at)
+  };
+}
+
+function mapCampaignRow(row) {
+  if (!row) return null;
+  return {
+    campaignId: row.campaign_id,
+    createdBy: row.created_by,
+    name: row.name,
+    orgName: row.org_name,
+    agreedToToSAt: normalizeTimestamp(row.agreed_to_tos_at),
+    tosVersion: row.tos_version,
+    stripeCustomerId: row.stripe_customer_id,
+    active: row.active,
+    contactsUsedThisMonth: toInt(row.contacts_used_this_month),
+    monthlyContactLimit: toInt(row.monthly_contact_limit),
+    createdAt: normalizeTimestamp(row.created_at),
+    updatedAt: normalizeTimestamp(row.updated_at)
+  };
+}
+
+function mapSolicitationPrefsRow(row) {
+  if (!row) return null;
+  return {
+    userId: row.user_id,
+    optedIn: row.opted_in,
+    shareEmail: row.share_email,
+    sharePhone: row.share_phone,
+    shareAddress: row.share_address,
+    pricePerContactCents: toInt(row.price_per_contact_cents),
+    consentVersion: row.consent_version,
+    totalEarningsCents: toInt(row.total_earnings_cents),
+    stripeConnectAccountId: row.stripe_connect_account_id,
+    createdAt: normalizeTimestamp(row.created_at),
+    updatedAt: normalizeTimestamp(row.updated_at)
+  };
+}
+
+function mapContactTransactionRow(row) {
+  if (!row) return null;
+  return {
+    transactionId: row.transaction_id,
+    campaignId: row.campaign_id,
+    userId: row.user_id,
+    contactedAt: normalizeTimestamp(row.contacted_at),
+    fieldsShared: row.fields_shared || [],
+    grossCents: toInt(row.gross_cents),
+    platformFeeCents: toInt(row.platform_fee_cents),
+    userEarningsCents: toInt(row.user_earnings_cents),
+    stripePaymentIntentId: row.stripe_payment_intent_id,
+    stripeTransferId: row.stripe_transfer_id
+  };
+}
+
+function mapOrganizationMessageRow(row) {
+  if (!row) return null;
+  return {
+    messageId: row.message_id,
+    organizationId: row.organization_id,
+    authorId: row.author_id,
+    authorName: row.author_name,
+    content: row.content,
+    type: row.type,
+    reactions: row.reactions || {},
+    permissionKitMessageId: row.permission_kit_message_id,
+    createdAt: normalizeTimestamp(row.created_at)
+  };
+}
+
+function mapForumPostRow(row) {
+  if (!row) return null;
+  return {
+    postId: row.post_id,
+    authorId: row.author_id,
+    authorName: row.author_name,
+    content: row.content,
+    billId: row.bill_id,
+    organizationId: row.organization_id,
+    likeCount: toInt(row.like_count),
+    commentCount: toInt(row.comment_count),
+    likedBy: row.liked_by || [],
+    permissionKitPostId: row.permission_kit_post_id,
+    isSample: row.is_sample,
+    createdAt: normalizeTimestamp(row.created_at)
+  };
+}
+
+function mapEventRow(row) {
+  if (!row) return null;
+  return {
+    eventId: row.event_id,
+    title: row.title,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    address: row.address,
+    startDate: normalizeTimestamp(row.start_date),
+    endDate: normalizeTimestamp(row.end_date),
+    description: row.description,
+    createdBy: row.created_by,
+    organizationId: row.organization_id,
+    attendeeCount: toInt(row.attendee_count),
+    isSample: row.is_sample,
+    createdAt: normalizeTimestamp(row.created_at),
+    updatedAt: normalizeTimestamp(row.updated_at)
+  };
+}
+
+function mapPermissionBatchRow(row) {
+  if (!row) return null;
+  return {
+    batchId: row.batch_id,
+    userId: row.user_id,
+    status: row.status,
+    posts: row.posts || [],
+    messages: row.messages || [],
+    processedAt: normalizeTimestamp(row.processed_at),
+    createdAt: normalizeTimestamp(row.created_at)
   };
 }
 
@@ -1120,6 +1710,565 @@ function createCockroachStore({
     query,
     getMigrationStatus,
     listMigrationHistory,
+
+    // -- devices (App Attest registry + perpetual API key cache) --------
+    async getDevice(deviceId) {
+      const result = await query(`SELECT * FROM devices WHERE device_id = $1`, [
+        deviceId
+      ]);
+      return mapDeviceRow(result.rows[0] || null);
+    },
+    async upsertDeviceRegistration({ deviceId, publicKey, counter = 0, bundleId }) {
+      const result = await query(
+        `INSERT INTO devices (device_id, public_key, counter, bundle_id, registered_at, updated_at)
+         VALUES ($1,$2,$3,$4, now(), now())
+         ON CONFLICT (device_id) DO UPDATE SET
+           public_key = EXCLUDED.public_key,
+           counter = EXCLUDED.counter,
+           bundle_id = EXCLUDED.bundle_id,
+           registered_at = EXCLUDED.registered_at,
+           updated_at = now()
+         RETURNING *`,
+        [deviceId, publicKey, counter, bundleId || null]
+      );
+      return mapDeviceRow(result.rows[0]);
+    },
+    async deleteDevice(deviceId) {
+      await query(`DELETE FROM devices WHERE device_id = $1`, [deviceId]);
+    },
+    async updateDeviceCounter(deviceId, counter) {
+      await query(
+        `UPDATE devices SET counter = $2, last_used = now(), updated_at = now()
+         WHERE device_id = $1`,
+        [deviceId, counter]
+      );
+    },
+    async upsertDeviceKeyIssuance({
+      deviceId,
+      service,
+      platform,
+      encryptedKey,
+      iv,
+      authTag,
+      keyVersion,
+      ipAddress
+    }) {
+      const result = await query(
+        `INSERT INTO devices (
+           device_id, service, platform, encrypted_key, iv, auth_tag, key_version,
+           issued_at, last_seen, revoked, request_count, ip_address, updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7, now(), now(), false, 1, $8, now())
+         ON CONFLICT (device_id) DO UPDATE SET
+           service = EXCLUDED.service,
+           platform = EXCLUDED.platform,
+           encrypted_key = EXCLUDED.encrypted_key,
+           iv = EXCLUDED.iv,
+           auth_tag = EXCLUDED.auth_tag,
+           key_version = EXCLUDED.key_version,
+           issued_at = now(),
+           last_seen = now(),
+           revoked = false,
+           request_count = 1,
+           ip_address = EXCLUDED.ip_address,
+           updated_at = now()
+         RETURNING *`,
+        [
+          deviceId,
+          service || null,
+          platform || null,
+          encryptedKey,
+          iv,
+          authTag,
+          keyVersion || null,
+          ipAddress || null
+        ]
+      );
+      return mapDeviceRow(result.rows[0]);
+    },
+    async touchDeviceLastSeen(deviceId) {
+      const result = await query(
+        `UPDATE devices SET last_seen = now(), request_count = request_count + 1, updated_at = now()
+         WHERE device_id = $1
+         RETURNING *`,
+        [deviceId]
+      );
+      return mapDeviceRow(result.rows[0] || null);
+    },
+    async setDeviceRevoked(deviceId, revoked, { reason = null, by = null } = {}) {
+      const result = await query(
+        `UPDATE devices SET
+           revoked = $2,
+           revoked_at = CASE WHEN $2 THEN now() ELSE NULL END,
+           revoked_reason = CASE WHEN $2 THEN $3 ELSE NULL END,
+           revoked_by = CASE WHEN $2 THEN $4 ELSE NULL END,
+           updated_at = now()
+         WHERE device_id = $1
+         RETURNING *`,
+        [deviceId, Boolean(revoked), reason, by]
+      );
+      return mapDeviceRow(result.rows[0] || null);
+    },
+    async listDevices({ limit = 50, platform = null, revoked = null } = {}) {
+      const result = await query(
+        `SELECT * FROM devices
+         WHERE ($2::text IS NULL OR platform = $2)
+           AND ($3::boolean IS NULL OR revoked = $3)
+         ORDER BY issued_at DESC NULLS LAST, updated_at DESC
+         LIMIT $1`,
+        [limit, platform, revoked]
+      );
+      return result.rows.map(mapDeviceRow);
+    },
+
+    // -- users ------------------------------------------------------------
+    async getUser(userId) {
+      const result = await query(`SELECT * FROM users WHERE user_id = $1`, [
+        userId
+      ]);
+      return mapUserRow(result.rows[0] || null);
+    },
+    async upsertUser(userId, data = {}) {
+      const {
+        email = null,
+        digitVerificationStatus = null,
+        ageRange = null,
+        politicalParty = null,
+        state = null,
+        employmentExpertise = null,
+        educationExpertise = null,
+        hobbyExpertise = null,
+        parentPhone = null,
+        verifiedAt = null,
+        ...rest
+      } = data;
+      const result = await query(
+        `INSERT INTO users (
+           user_id, email, digit_verification_status, age_range, political_party, state,
+           employment_expertise, education_expertise, hobby_expertise, parent_phone,
+           profile, verified_at, updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,now())
+         ON CONFLICT (user_id) DO UPDATE SET
+           email = COALESCE($2, users.email),
+           digit_verification_status = COALESCE($3, users.digit_verification_status),
+           age_range = COALESCE($4, users.age_range),
+           political_party = COALESCE($5, users.political_party),
+           state = COALESCE($6, users.state),
+           employment_expertise = COALESCE($7, users.employment_expertise),
+           education_expertise = COALESCE($8, users.education_expertise),
+           hobby_expertise = COALESCE($9, users.hobby_expertise),
+           parent_phone = COALESCE($10, users.parent_phone),
+           profile = users.profile || $11::jsonb,
+           verified_at = COALESCE($12, users.verified_at),
+           updated_at = now()
+         RETURNING *`,
+        [
+          userId,
+          email,
+          digitVerificationStatus,
+          ageRange,
+          politicalParty,
+          state,
+          employmentExpertise,
+          educationExpertise,
+          hobbyExpertise,
+          parentPhone,
+          JSON.stringify(rest || {}),
+          verifiedAt
+        ]
+      );
+      return mapUserRow(result.rows[0]);
+    },
+    async deleteUser(userId) {
+      await query(`DELETE FROM users WHERE user_id = $1`, [userId]);
+    },
+
+    // -- votes / bookmarks --------------------------------------------
+    async getUserVote(userId, billId) {
+      const result = await query(
+        `SELECT * FROM user_votes WHERE user_id = $1 AND bill_id = $2`,
+        [userId, billId]
+      );
+      return mapUserVoteRow(result.rows[0] || null);
+    },
+    async setUserVote(userId, billId, data = {}) {
+      const result = await query(
+        `INSERT INTO user_votes (
+           user_id, bill_id, vote, bill_committees, state, age_range,
+           employment_expertise, education_expertise, hobby_expertise, political_party,
+           verified, verified_age, counted_in_results, updated_at
+         ) VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
+         ON CONFLICT (user_id, bill_id) DO UPDATE SET
+           vote = EXCLUDED.vote,
+           bill_committees = EXCLUDED.bill_committees,
+           state = EXCLUDED.state,
+           age_range = EXCLUDED.age_range,
+           employment_expertise = EXCLUDED.employment_expertise,
+           education_expertise = EXCLUDED.education_expertise,
+           hobby_expertise = EXCLUDED.hobby_expertise,
+           political_party = EXCLUDED.political_party,
+           verified = EXCLUDED.verified,
+           verified_age = EXCLUDED.verified_age,
+           counted_in_results = EXCLUDED.counted_in_results,
+           updated_at = now()
+         RETURNING *`,
+        [
+          userId,
+          billId,
+          data.vote,
+          JSON.stringify(data.billCommittees || []),
+          data.state || null,
+          data.ageRange || null,
+          data.employmentExpertise || null,
+          data.educationExpertise || null,
+          data.hobbyExpertise || null,
+          data.politicalParty || null,
+          Boolean(data.verified),
+          data.verifiedAge ?? null,
+          Boolean(data.countedInResults)
+        ]
+      );
+      return mapUserVoteRow(result.rows[0]);
+    },
+    async listUserVotes(userId) {
+      const result = await query(
+        `SELECT * FROM user_votes WHERE user_id = $1 ORDER BY updated_at DESC`,
+        [userId]
+      );
+      return result.rows.map(mapUserVoteRow);
+    },
+    async adjustBillVoteCounts(billId, { supportDelta = 0, opposeDelta = 0, totalDelta = 0 }) {
+      const result = await query(
+        `INSERT INTO bill_votes (bill_id, support_count, oppose_count, total_votes, updated_at)
+         VALUES ($1, GREATEST($2,0), GREATEST($3,0), GREATEST($4,0), now())
+         ON CONFLICT (bill_id) DO UPDATE SET
+           support_count = GREATEST(bill_votes.support_count + $2, 0),
+           oppose_count = GREATEST(bill_votes.oppose_count + $3, 0),
+           total_votes = GREATEST(bill_votes.total_votes + $4, 0),
+           updated_at = now()
+         RETURNING *`,
+        [billId, supportDelta, opposeDelta, totalDelta]
+      );
+      return mapBillVotesRow(result.rows[0]);
+    },
+    async getBillVotes(billId) {
+      const result = await query(`SELECT * FROM bill_votes WHERE bill_id = $1`, [
+        billId
+      ]);
+      return mapBillVotesRow(result.rows[0] || null);
+    },
+    async setUserBookmark(userId, billId, { billNumber = null, title = null } = {}) {
+      const result = await query(
+        `INSERT INTO user_bookmarks (user_id, bill_id, bill_number, title, created_at)
+         VALUES ($1,$2,$3,$4, now())
+         ON CONFLICT (user_id, bill_id) DO UPDATE SET
+           bill_number = EXCLUDED.bill_number,
+           title = EXCLUDED.title
+         RETURNING *`,
+        [userId, billId, billNumber, title]
+      );
+      return mapUserBookmarkRow(result.rows[0]);
+    },
+    async deleteUserBookmark(userId, billId) {
+      await query(
+        `DELETE FROM user_bookmarks WHERE user_id = $1 AND bill_id = $2`,
+        [userId, billId]
+      );
+    },
+    async listUserBookmarks(userId) {
+      const result = await query(
+        `SELECT * FROM user_bookmarks WHERE user_id = $1 ORDER BY created_at DESC`,
+        [userId]
+      );
+      return result.rows.map(mapUserBookmarkRow);
+    },
+    async deleteAllUserVotes(userId) {
+      await query(`DELETE FROM user_votes WHERE user_id = $1`, [userId]);
+    },
+    async deleteAllUserBookmarks(userId) {
+      await query(`DELETE FROM user_bookmarks WHERE user_id = $1`, [userId]);
+    },
+
+    // -- marketplace: campaigns / solicitation prefs / contact transactions --
+    async createCampaign({
+      createdBy,
+      name,
+      orgName,
+      stripeCustomerId = null,
+      tosVersion = "1.0",
+      monthlyContactLimit = 1000
+    }) {
+      const result = await query(
+        `INSERT INTO registered_campaigns (
+           campaign_id, created_by, name, org_name, agreed_to_tos_at, tos_version,
+           stripe_customer_id, active, contacts_used_this_month, monthly_contact_limit
+         ) VALUES (gen_random_uuid()::text, $1,$2,$3, now(), $4, $5, true, 0, $6)
+         RETURNING *`,
+        [createdBy, name, orgName, tosVersion, stripeCustomerId, monthlyContactLimit]
+      );
+      return mapCampaignRow(result.rows[0]);
+    },
+    async getCampaign(campaignId) {
+      const result = await query(
+        `SELECT * FROM registered_campaigns WHERE campaign_id = $1`,
+        [campaignId]
+      );
+      return mapCampaignRow(result.rows[0] || null);
+    },
+
+    async getSolicitationPrefs(userId) {
+      const result = await query(
+        `SELECT * FROM user_solicitation_prefs WHERE user_id = $1`,
+        [userId]
+      );
+      return mapSolicitationPrefsRow(result.rows[0] || null);
+    },
+    async upsertSolicitationPrefs(userId, data = {}) {
+      const result = await query(
+        `INSERT INTO user_solicitation_prefs (
+           user_id, opted_in, share_email, share_phone, share_address,
+           price_per_contact_cents, consent_version, stripe_connect_account_id, updated_at
+         ) VALUES (
+           $1,
+           COALESCE($2, false), COALESCE($3, false), COALESCE($4, false), COALESCE($5, false),
+           COALESCE($6, 50), $7, $8, now()
+         )
+         ON CONFLICT (user_id) DO UPDATE SET
+           opted_in = COALESCE($2, user_solicitation_prefs.opted_in),
+           share_email = COALESCE($3, user_solicitation_prefs.share_email),
+           share_phone = COALESCE($4, user_solicitation_prefs.share_phone),
+           share_address = COALESCE($5, user_solicitation_prefs.share_address),
+           price_per_contact_cents = COALESCE($6, user_solicitation_prefs.price_per_contact_cents),
+           consent_version = COALESCE($7, user_solicitation_prefs.consent_version),
+           stripe_connect_account_id = COALESCE($8, user_solicitation_prefs.stripe_connect_account_id),
+           updated_at = now()
+         RETURNING *`,
+        [
+          userId,
+          data.optedIn ?? null,
+          data.shareEmail ?? null,
+          data.sharePhone ?? null,
+          data.shareAddress ?? null,
+          data.pricePerContactCents ?? null,
+          data.consentVersion ?? null,
+          data.stripeConnectAccountId ?? null
+        ]
+      );
+      return mapSolicitationPrefsRow(result.rows[0]);
+    },
+    async incrementSolicitationEarnings(userId, deltaCents) {
+      const result = await query(
+        `INSERT INTO user_solicitation_prefs (user_id, total_earnings_cents, updated_at)
+         VALUES ($1, GREATEST($2,0), now())
+         ON CONFLICT (user_id) DO UPDATE SET
+           total_earnings_cents = user_solicitation_prefs.total_earnings_cents + $2,
+           updated_at = now()
+         RETURNING *`,
+        [userId, deltaCents]
+      );
+      return mapSolicitationPrefsRow(result.rows[0]);
+    },
+    async listOptedInSolicitationPrefs() {
+      const result = await query(
+        `SELECT * FROM user_solicitation_prefs WHERE opted_in = true`
+      );
+      return result.rows.map(mapSolicitationPrefsRow);
+    },
+    async deleteSolicitationPrefs(userId) {
+      await query(`DELETE FROM user_solicitation_prefs WHERE user_id = $1`, [
+        userId
+      ]);
+    },
+
+    async createContactTransaction({
+      campaignId,
+      userId,
+      fieldsShared,
+      grossCents,
+      platformFeeCents,
+      userEarningsCents,
+      stripePaymentIntentId
+    }) {
+      const result = await query(
+        `INSERT INTO contact_transactions (
+           transaction_id, campaign_id, user_id, contacted_at, fields_shared,
+           gross_cents, platform_fee_cents, user_earnings_cents, stripe_payment_intent_id
+         ) VALUES (gen_random_uuid()::text, $1,$2, now(), $3::jsonb, $4,$5,$6,$7)
+         RETURNING *`,
+        [
+          campaignId,
+          userId,
+          JSON.stringify(fieldsShared || []),
+          grossCents,
+          platformFeeCents,
+          userEarningsCents,
+          stripePaymentIntentId || null
+        ]
+      );
+      return mapContactTransactionRow(result.rows[0]);
+    },
+    async listContactTransactionsByPaymentIntent(paymentIntentId) {
+      const result = await query(
+        `SELECT * FROM contact_transactions WHERE stripe_payment_intent_id = $1`,
+        [paymentIntentId]
+      );
+      return result.rows.map(mapContactTransactionRow);
+    },
+    async setContactTransactionTransfer(transactionId, transferId) {
+      await query(
+        `UPDATE contact_transactions SET stripe_transfer_id = $2 WHERE transaction_id = $1`,
+        [transactionId, transferId]
+      );
+    },
+
+    // -- organization messages / forum posts / events --------------------
+    async createOrganizationMessage({
+      organizationId,
+      authorId,
+      authorName,
+      content,
+      type = "text",
+      permissionKitMessageId = null
+    }) {
+      const result = await query(
+        `INSERT INTO organization_messages (
+           message_id, organization_id, author_id, author_name, content, type, permission_kit_message_id
+         ) VALUES (gen_random_uuid()::text, $1,$2,$3,$4,$5,$6)
+         RETURNING *`,
+        [organizationId, authorId, authorName, content, type, permissionKitMessageId]
+      );
+      return mapOrganizationMessageRow(result.rows[0]);
+    },
+    async listOrganizationMessages(organizationId, limit = 50) {
+      const result = await query(
+        `SELECT * FROM organization_messages WHERE organization_id = $1
+         ORDER BY created_at DESC LIMIT $2`,
+        [organizationId, limit]
+      );
+      return result.rows.map(mapOrganizationMessageRow);
+    },
+
+    async createForumPost({
+      authorId,
+      authorName,
+      content,
+      billId = null,
+      organizationId = null,
+      permissionKitPostId = null
+    }) {
+      const result = await query(
+        `INSERT INTO forum_posts (
+           post_id, author_id, author_name, content, bill_id, organization_id, permission_kit_post_id
+         ) VALUES (gen_random_uuid()::text, $1,$2,$3,$4,$5,$6)
+         RETURNING *`,
+        [authorId, authorName, content, billId, organizationId, permissionKitPostId]
+      );
+      return mapForumPostRow(result.rows[0]);
+    },
+    async listForumPosts({ limit = 50, billId = null, organizationId = null } = {}) {
+      const result = await query(
+        `SELECT * FROM forum_posts
+         WHERE ($2::text IS NULL OR bill_id = $2)
+           AND ($3::text IS NULL OR organization_id = $3)
+         ORDER BY created_at DESC LIMIT $1`,
+        [limit, billId, organizationId]
+      );
+      return result.rows.map(mapForumPostRow);
+    },
+
+    async createEvent({
+      title,
+      latitude,
+      longitude,
+      address,
+      startDate,
+      endDate,
+      description = null,
+      createdBy,
+      organizationId = null
+    }) {
+      const result = await query(
+        `INSERT INTO events (
+           event_id, title, latitude, longitude, address, start_date, end_date,
+           description, created_by, organization_id
+         ) VALUES (gen_random_uuid()::text, $1,$2,$3,$4,$5::timestamptz,$6::timestamptz,$7,$8,$9)
+         RETURNING *`,
+        [title, latitude, longitude, address, startDate, endDate, description, createdBy, organizationId]
+      );
+      return mapEventRow(result.rows[0]);
+    },
+    async getEvent(eventId) {
+      const result = await query(`SELECT * FROM events WHERE event_id = $1`, [
+        eventId
+      ]);
+      return mapEventRow(result.rows[0] || null);
+    },
+    async listUpcomingEvents(limit = 50) {
+      const result = await query(
+        `SELECT * FROM events WHERE start_date > now() ORDER BY start_date ASC LIMIT $1`,
+        [limit]
+      );
+      return result.rows.map(mapEventRow);
+    },
+    async addEventAttendee(eventId, userId) {
+      const result = await query(
+        `WITH ins AS (
+           INSERT INTO event_attendees (event_id, user_id)
+           VALUES ($1, $2)
+           ON CONFLICT (event_id, user_id) DO NOTHING
+           RETURNING event_id
+         )
+         UPDATE events SET
+           attendee_count = attendee_count + (SELECT count(*) FROM ins),
+           updated_at = now()
+         WHERE event_id = $1
+         RETURNING *`,
+        [eventId, userId]
+      );
+      return mapEventRow(result.rows[0] || null);
+    },
+    async removeEventAttendee(eventId, userId) {
+      const result = await query(
+        `WITH del AS (
+           DELETE FROM event_attendees WHERE event_id = $1 AND user_id = $2
+           RETURNING event_id
+         )
+         UPDATE events SET
+           attendee_count = GREATEST(attendee_count - (SELECT count(*) FROM del), 0),
+           updated_at = now()
+         WHERE event_id = $1
+         RETURNING *`,
+        [eventId, userId]
+      );
+      return mapEventRow(result.rows[0] || null);
+    },
+
+    // -- permission batches (PermissionKit minor-consent queueing) -------
+    async createPermissionBatch({ userId, posts = [], messages = [] }) {
+      const result = await query(
+        `INSERT INTO permission_batches (batch_id, user_id, status, posts, messages)
+         VALUES (gen_random_uuid()::text, $1, 'pending', $2::jsonb, $3::jsonb)
+         RETURNING *`,
+        [userId, JSON.stringify(posts), JSON.stringify(messages)]
+      );
+      return mapPermissionBatchRow(result.rows[0]);
+    },
+    async getPermissionBatch(batchId) {
+      const result = await query(
+        `SELECT * FROM permission_batches WHERE batch_id = $1`,
+        [batchId]
+      );
+      return mapPermissionBatchRow(result.rows[0] || null);
+    },
+    async setPermissionBatchStatus(batchId, status) {
+      const result = await query(
+        `UPDATE permission_batches SET status = $2, processed_at = now()
+         WHERE batch_id = $1
+         RETURNING *`,
+        [batchId, status]
+      );
+      return mapPermissionBatchRow(result.rows[0] || null);
+    },
+
     async saveVerificationSession(session) {
       const result = await query(
         `INSERT INTO verification_sessions (
