@@ -22,7 +22,7 @@ try {
 } catch (_) {}
 
 const COCKROACH_COMPONENT = "cockroach-store";
-const COCKROACH_SCHEMA_VERSION = "2026-08-31.4";
+const COCKROACH_SCHEMA_VERSION = "2026-08-31.5";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS verification_sessions (
@@ -850,10 +850,12 @@ const cockroachMigrationRegistry = createMigrationRegistry({
       toVersion: "2026-08-31.4",
       type: "additive",
       description:
-        "Add forum_comments and forum_reports tables -- forum_posts already carries like_count/liked_by for likes, but had no comment storage at all (comment_count existed with nothing to back it), and no report/flag path existed anywhere.",
+        "Add forum_comments and forum_reports tables -- forum_posts already carries like_count/liked_by for likes, but had no comment storage at all (comment_count existed with nothing to back it), and no report/flag path existed anywhere. Also add permission_batches.comments so minor-consent batching covers comments alongside posts/messages.",
       canAutoRun: true,
       up: async ({ pool }) => {
         await pool.query(`
+          ALTER TABLE permission_batches ADD COLUMN IF NOT EXISTS comments JSONB NOT NULL DEFAULT '[]'::jsonb;
+
           CREATE TABLE IF NOT EXISTS forum_comments (
             comment_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
             post_id TEXT NOT NULL,
@@ -881,6 +883,47 @@ const cockroachMigrationRegistry = createMigrationRegistry({
       validate: async ({ pool }) => {
         await pool.query("SELECT 1 FROM forum_comments LIMIT 1");
         await pool.query("SELECT 1 FROM forum_reports LIMIT 1");
+      }
+    },
+    {
+      id: "cockroach-store:populist-organizations-2026-08-31.5",
+      fromVersion: "2026-08-31.4",
+      toVersion: "2026-08-31.5",
+      type: "additive",
+      description:
+        "Add organizations and organization_members tables -- organization_messages.organization_id was free text with no parent row, no FK, and no membership check, so any authed user could read/write any org's chat by guessing/reusing an id, and the iOS client had no durable org id at all (regenerated a random UUID every launch).",
+      canAutoRun: true,
+      up: async ({ pool }) => {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS organizations (
+            organization_id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            headquarters TEXT NULL,
+            latitude DOUBLE PRECISION NULL,
+            longitude DOUBLE PRECISION NULL,
+            category TEXT NULL,
+            creator_id TEXT NOT NULL,
+            member_count INT NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          );
+
+          CREATE TABLE IF NOT EXISTS organization_members (
+            organization_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'member',
+            joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (organization_id, user_id)
+          );
+
+          CREATE INDEX IF NOT EXISTS organization_members_user_idx
+            ON organization_members (user_id, joined_at DESC);
+        `);
+      },
+      validate: async ({ pool }) => {
+        await pool.query("SELECT 1 FROM organizations LIMIT 1");
+        await pool.query("SELECT 1 FROM organization_members LIMIT 1");
       }
     }
   ]
@@ -1117,6 +1160,23 @@ function mapOrganizationMessageRow(row) {
   };
 }
 
+function mapOrganizationRow(row) {
+  if (!row) return null;
+  return {
+    organizationId: row.organization_id,
+    name: row.name,
+    description: row.description,
+    headquarters: row.headquarters,
+    latitude: row.latitude === null ? null : Number(row.latitude),
+    longitude: row.longitude === null ? null : Number(row.longitude),
+    category: row.category,
+    creatorId: row.creator_id,
+    memberCount: toInt(row.member_count),
+    createdAt: normalizeTimestamp(row.created_at),
+    updatedAt: normalizeTimestamp(row.updated_at)
+  };
+}
+
 function mapForumPostRow(row) {
   if (!row) return null;
   return {
@@ -1175,6 +1235,7 @@ function mapPermissionBatchRow(row) {
     status: row.status,
     posts: row.posts || [],
     messages: row.messages || [],
+    comments: row.comments || [],
     processedAt: normalizeTimestamp(row.processed_at),
     createdAt: normalizeTimestamp(row.created_at)
   };
@@ -2197,6 +2258,131 @@ function createCockroachStore({
       );
       return result.rows.map(mapOrganizationMessageRow);
     },
+    async deleteOrganizationMessage(messageId, authorId) {
+      const result = await query(
+        `DELETE FROM organization_messages WHERE message_id = $1 AND author_id = $2 RETURNING message_id`,
+        [messageId, authorId]
+      );
+      return result.rows.length > 0;
+    },
+    // Reactions live as {emoji: [userId, ...]} directly on the message row.
+    // Containment (@>) keeps add/remove idempotent, matching the forum
+    // like/unlike pattern on forum_posts.liked_by.
+    async reactToOrganizationMessage(messageId, userId, emoji) {
+      const result = await query(
+        `UPDATE organization_messages
+         SET reactions = jsonb_set(
+           reactions,
+           ARRAY[$3],
+           CASE WHEN COALESCE(reactions->$3, '[]'::jsonb) @> to_jsonb($2::text)
+             THEN COALESCE(reactions->$3, '[]'::jsonb)
+             ELSE COALESCE(reactions->$3, '[]'::jsonb) || to_jsonb($2::text)
+           END
+         )
+         WHERE message_id = $1
+         RETURNING *`,
+        [messageId, userId, emoji]
+      );
+      return mapOrganizationMessageRow(result.rows[0] || null);
+    },
+    async removeReactionFromOrganizationMessage(messageId, userId, emoji) {
+      const result = await query(
+        `UPDATE organization_messages
+         SET reactions = jsonb_set(
+           reactions,
+           ARRAY[$3],
+           COALESCE(
+             (SELECT jsonb_agg(elem) FROM jsonb_array_elements(COALESCE(reactions->$3, '[]'::jsonb)) elem
+              WHERE elem != to_jsonb($2::text)),
+             '[]'::jsonb
+           )
+         )
+         WHERE message_id = $1
+         RETURNING *`,
+        [messageId, userId, emoji]
+      );
+      return mapOrganizationMessageRow(result.rows[0] || null);
+    },
+
+    // -- organizations (real identity + membership, replacing the client-
+    // side-only UUID that used to be regenerated every launch) ----------
+    async createOrganization({
+      name,
+      description = null,
+      headquarters = null,
+      latitude = null,
+      longitude = null,
+      category = null,
+      creatorId
+    }) {
+      const result = await query(
+        `WITH org AS (
+           INSERT INTO organizations (
+             organization_id, name, description, headquarters, latitude, longitude, category, creator_id, member_count
+           ) VALUES (gen_random_uuid()::text, $1,$2,$3,$4,$5,$6,$7,1)
+           RETURNING *
+         ),
+         membership AS (
+           INSERT INTO organization_members (organization_id, user_id, role)
+           SELECT organization_id, $7, 'owner' FROM org
+         )
+         SELECT * FROM org`,
+        [name, description, headquarters, latitude, longitude, category, creatorId]
+      );
+      return mapOrganizationRow(result.rows[0]);
+    },
+    async getOrganization(organizationId) {
+      const result = await query(`SELECT * FROM organizations WHERE organization_id = $1`, [
+        organizationId
+      ]);
+      return mapOrganizationRow(result.rows[0] || null);
+    },
+    async listOrganizations(limit = 50) {
+      const result = await query(
+        `SELECT * FROM organizations ORDER BY created_at DESC LIMIT $1`,
+        [limit]
+      );
+      return result.rows.map(mapOrganizationRow);
+    },
+    async isOrganizationMember(organizationId, userId) {
+      const result = await query(
+        `SELECT 1 FROM organization_members WHERE organization_id = $1 AND user_id = $2`,
+        [organizationId, userId]
+      );
+      return result.rows.length > 0;
+    },
+    async joinOrganization(organizationId, userId) {
+      const result = await query(
+        `WITH ins AS (
+           INSERT INTO organization_members (organization_id, user_id)
+           VALUES ($1, $2)
+           ON CONFLICT (organization_id, user_id) DO NOTHING
+           RETURNING organization_id
+         )
+         UPDATE organizations SET
+           member_count = member_count + (SELECT count(*) FROM ins),
+           updated_at = now()
+         WHERE organization_id = $1
+         RETURNING *`,
+        [organizationId, userId]
+      );
+      return mapOrganizationRow(result.rows[0] || null);
+    },
+    async leaveOrganization(organizationId, userId) {
+      const result = await query(
+        `WITH del AS (
+           DELETE FROM organization_members WHERE organization_id = $1 AND user_id = $2
+           RETURNING organization_id
+         )
+         UPDATE organizations SET
+           member_count = GREATEST(member_count - (SELECT count(*) FROM del), 0),
+           updated_at = now()
+         WHERE organization_id = $1
+         RETURNING *`,
+        [organizationId, userId]
+      );
+      return mapOrganizationRow(result.rows[0] || null);
+    },
 
     async createForumPost({
       authorId,
@@ -2402,12 +2588,12 @@ function createCockroachStore({
     },
 
     // -- permission batches (PermissionKit minor-consent queueing) -------
-    async createPermissionBatch({ userId, posts = [], messages = [] }) {
+    async createPermissionBatch({ userId, posts = [], messages = [], comments = [] }) {
       const result = await query(
-        `INSERT INTO permission_batches (batch_id, user_id, status, posts, messages)
-         VALUES (gen_random_uuid()::text, $1, 'pending', $2::jsonb, $3::jsonb)
+        `INSERT INTO permission_batches (batch_id, user_id, status, posts, messages, comments)
+         VALUES (gen_random_uuid()::text, $1, 'pending', $2::jsonb, $3::jsonb, $4::jsonb)
          RETURNING *`,
-        [userId, JSON.stringify(posts), JSON.stringify(messages)]
+        [userId, JSON.stringify(posts), JSON.stringify(messages), JSON.stringify(comments)]
       );
       return mapPermissionBatchRow(result.rows[0]);
     },
