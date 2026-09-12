@@ -7,6 +7,7 @@
 
 import { createIdentityResolver } from "../../protocol/identity/identityClient.js";
 import { createWalletProofBase64 } from "../../protocol/walletProof.js";
+import { warnFoldedAuthority } from "../shywareConfig.js";
 
 export const CONTRACTS_MANIFEST_CONTRACT_VERSION = "shycontracts-v1";
 
@@ -350,6 +351,7 @@ export function createContractsClient({
 
 export function initializeFromShyConfig(shyconfig, options = {}) {
   assertContractsManifest(shyconfig);
+  warnFoldedAuthority(shyconfig);
   if (shyconfig.api?.requires_auth && typeof options.getAuthHeaders !== "function") {
     throw new Error("shyconfig requires authenticated contracts API access, but no auth header provider was supplied.");
   }

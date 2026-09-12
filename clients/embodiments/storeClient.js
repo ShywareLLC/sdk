@@ -14,6 +14,7 @@
  * has access to plaintext. Local sealing (sealSecret / openSecret) uses shywareSealer.js.
  */
 import { sealPayload, openPayload } from "../../protocol/sealer.js";
+import { warnFoldedAuthority } from "../shywareConfig.js";
 import {
   applyStoreAnonLayerDefaults,
   assertStoreBackedAnonLayer
@@ -478,6 +479,7 @@ export function createStoreClient({
 export function initializeFromShyConfig(shyconfig, options = {}) {
   applyStoreAnonLayerDefaults(shyconfig);
   assertStoreManifest(shyconfig);
+  warnFoldedAuthority(shyconfig);
 
   const requiresAuth =
     shyconfig.api?.requires_auth === true ||

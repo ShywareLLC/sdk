@@ -8,6 +8,7 @@
  * Uses shared sealer logic from shywareSealer.js for PII/high-risk payloads. Accepts async deriveSealerKey for idempotent, ephemeral key derivation. All gating is driven by the 'sealer' block in config.
  */
 import { sealPayload, openPayload } from "../../protocol/sealer.js";
+import { warnFoldedAuthority } from "../shywareConfig.js";
 
 // shychat-v1 is the canonical contract version for all messaging surfaces.
 export const CHAT_MANIFEST_CONTRACT_VERSION = "shychat-v1";
@@ -271,6 +272,7 @@ export function createChatClient({
 
 export function initializeFromShyConfig(shyconfig, options = {}) {
   assertChatManifest(shyconfig);
+  warnFoldedAuthority(shyconfig);
 
   const requiresAuth =
     shyconfig.api?.requires_auth === true ||

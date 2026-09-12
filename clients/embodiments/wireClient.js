@@ -9,6 +9,7 @@
 
 import { createIdentityResolver } from "../../protocol/identity/identityClient.js";
 import { createWalletProofBase64 } from "../../protocol/walletProof.js";
+import { warnFoldedAuthority } from "../shywareConfig.js";
 
 export const WIRE_MANIFEST_CONTRACT_VERSION = "shywire-v1";
 
@@ -527,6 +528,7 @@ export function createWireClient({
 
 export function initializeFromShyConfig(shyconfig, options = {}) {
   assertWireManifest(shyconfig);
+  warnFoldedAuthority(shyconfig);
 
   if (
     shyconfig.api?.requires_auth &&

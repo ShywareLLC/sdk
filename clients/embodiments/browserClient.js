@@ -7,6 +7,7 @@
  */
 
 import { openPayload, sealPayload } from "../../protocol/sealer.js";
+import { warnFoldedAuthority } from "../shywareConfig.js";
 
 export const BROWSER_MANIFEST_CONTRACT_VERSION = "shybrowser-v1";
 
@@ -188,6 +189,7 @@ export function createBrowserClient({
 
 export function initializeFromShyConfig(shyconfig, options = {}) {
   assertBrowserManifest(shyconfig);
+  warnFoldedAuthority(shyconfig);
 
   const requiresAuth =
     shyconfig.api?.requires_auth === true ||

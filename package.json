@@ -1,6 +1,6 @@
 {
   "name": "@shyware/sdk",
-  "version": "0.8.7",
+  "version": "0.9.0",
   "description": "Structurally anonymous distributed-ledger protocol SDK. Non-linkability by write architecture — not policy.",
   "type": "module",
   "main": "./index.js",
@@ -23,6 +23,8 @@
     "./adapters/ledger/fabric": "./adapters/ledger/fabric.js",
     "./adapters/ledger/cockroach": "./adapters/ledger/cockroach.js",
     "./adapters/ledger/dual": "./adapters/ledger/dual.js",
+    "./adapters/ledger/dynamodb": "./adapters/ledger/dynamodb.js",
+    "./adapters/ledger/memory": "./adapters/ledger/memory.js",
     "./adapters/ledger/coverTraffic": "./adapters/ledger/coverTraffic.js",
     "./adapters/migration": {
       "require": "./adapters/migration/engine.cjs",
@@ -51,9 +53,11 @@
     "./adapters/signing": "./adapters/signing/interface.js",
     "./adapters/signing/software": "./adapters/signing/software.js",
     "./adapters/signing/kms": "./adapters/signing/kms.js",
+    "./adapters/signing/azure-keyvault": "./adapters/signing/azure-keyvault.js",
     "./adapters/auth": "./adapters/auth/interface.js",
     "./adapters/auth/cognito": "./adapters/auth/cognito.js",
     "./adapters/auth/jwks": "./adapters/auth/jwks.js",
+    "./adapters/auth/firebase": "./adapters/auth/firebase.js",
     "./adapters/telemetry": "./adapters/telemetry/interface.js",
     "./adapters/telemetry/noop": "./adapters/telemetry/noop.js",
     "./adapters/telemetry/otel": "./adapters/telemetry/otel.js",

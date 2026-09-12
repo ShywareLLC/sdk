@@ -21,7 +21,21 @@ export class AwsKmsSigningInterface extends SigningInterface {
     return this._kms;
   }
 
+  // Fetches and caches the DER-encoded public key from KMS.
+  // Called lazily on first sign() — consistent with GcpKmsSigningInterface and VaultSigningInterface.
+  // Can also be called explicitly to pre-warm the cache before the first sign call.
+  async _ensurePublicKey() {
+    if (this._publicKeyPem) return;
+    const { GetPublicKeyCommand } = await import('@aws-sdk/client-kms');
+    const kms = await this._client();
+    const res = await kms.send(new GetPublicKeyCommand({ KeyId: this._keyId }));
+    // res.PublicKey is a Uint8Array of the DER-encoded SubjectPublicKeyInfo.
+    // Store as base64 for interop with x509.ParsePKIXPublicKey consumers.
+    this._publicKeyPem = Buffer.from(res.PublicKey).toString('base64');
+  }
+
   async sign(message) {
+    await this._ensurePublicKey();
     const { SignCommand } = await import('@aws-sdk/client-kms');
     const kms = await this._client();
     const res = await kms.send(new SignCommand({ KeyId: this._keyId, Message: Buffer.from(message, 'utf8'), MessageType: 'RAW', SigningAlgorithm: 'ECDSA_SHA_256' }));

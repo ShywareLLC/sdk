@@ -11,6 +11,7 @@
 import { sealPayload, openPayload } from "../../protocol/sealer.js";
 
 import { createIdentityResolver } from "../../protocol/identity/identityClient.js";
+import { warnFoldedAuthority } from "../shywareConfig.js";
 
 export const SHARES_MANIFEST_CONTRACT_VERSION = "shyshares-v1";
 
@@ -285,6 +286,7 @@ export function createSharesClient({
 
 export function initializeFromShyConfig(shyconfig, options = {}) {
   assertSharesManifest(shyconfig);
+  warnFoldedAuthority(shyconfig);
 
   if (
     shyconfig.api?.requires_auth &&

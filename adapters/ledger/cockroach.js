@@ -1,6 +1,22 @@
 import { randomUUID, createHash } from 'crypto';
 import { LedgerInterface } from './interface.js';
 
+/**
+ * CockroachLedgerInterface — two-list write adapter for any Postgres-compatible database.
+ *
+ * Works with CockroachDB, plain Postgres (pg / pg-pool), Supabase, RDS, Aurora,
+ * Neon, and any other driver that exposes a query(sql, params) → { rows } function.
+ *
+ * Pass the driver's query function directly:
+ *   const { Pool } = await import('pg');
+ *   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+ *   new CockroachLedgerInterface({ query: (sql, params) => pool.query(sql, params) });
+ *
+ * Required schema (run once):
+ *   CREATE TABLE shy_l1 (tx_id UUID, scoping_id TEXT, submission_id TEXT, payload_commitment TEXT, domain_fields JSONB, created_at TIMESTAMPTZ, PRIMARY KEY (scoping_id, submission_id));
+ *   CREATE TABLE shy_l2 (tx_id UUID, scoping_id TEXT, identity_hash TEXT, domain_fields JSONB, created_at TIMESTAMPTZ, PRIMARY KEY (scoping_id, identity_hash));
+ *   CREATE TABLE shy_period_close (tx_id UUID, scoping_id TEXT, l1_merkle_root TEXT, l2_merkle_root TEXT, attestation TEXT, created_at TIMESTAMPTZ);
+ */
 export class CockroachLedgerInterface extends LedgerInterface {
   constructor({ query }) {
     super();

@@ -151,6 +151,15 @@ function normalizeRuntimeSignals(runtimeSignals = {}) {
       webSessionExpiry <= 0 ||
       webSessionExpiry > Date.now());
 
+  // serverPosture is set by the app after calling the public posture endpoint
+  // (GET /api/v1/posture), which resolves the participant's country from IP and
+  // returns the operator-configured posture for that country. Pass
+  // { serverPosture: 'write_only' } when the server reports a write-only country.
+  // 'write_only' escalates over the manifest default; 'recoverable' does not
+  // downgrade a manifest coercion_resistant default.
+  const serverPosture =
+    runtimeSignals.serverPosture === 'write_only' ? 'write_only' : null;
+
   return {
     playIntegrity: {
       available: Boolean(runtimeSignals.playIntegrity?.available),
@@ -165,6 +174,7 @@ function normalizeRuntimeSignals(runtimeSignals = {}) {
     hsm: {
       available: runtimeSignals.hsm?.available !== false
     },
+    serverPosture,
     webSession: {
       approved: webSessionApproved,
       expiresAt:
@@ -389,12 +399,20 @@ export function resolveEffectivePosture(manifest, runtimeSignals = {}) {
     effectivePosture = "write_only";
   }
 
+  // Server-reported country posture: escalates to write_only when the operator
+  // has configured this country as write-only via the posture dashboard.
+  // Never downgrades — a manifest coercion_resistant default is unchanged.
+  if (normalized.serverPosture === "write_only") {
+    effectivePosture = "write_only";
+  }
+
   return {
     configuredPosture: defaultPosture,
     effectivePosture,
     fallbackActive: effectiveFallbackReasons.length > 0,
     fallbackReasons: effectiveFallbackReasons,
     runtimeSignals: normalized,
+    serverPostureActive: normalized.serverPosture === "write_only",
     writeOnly: effectivePosture === "write_only"
   };
 }
@@ -771,7 +789,7 @@ export function createVotingClient({
       });
       const posture = resolveEffectivePosture(manifest, runtimeSignals);
       if (posture.writeOnly) {
-        return { submissionId: envelope.submissionId, writeOnly: true };
+        return { writeOnly: true };
       }
       return envelope;
     },
@@ -799,7 +817,7 @@ export function createVotingClient({
       await post("/submissions", { tx: envelope.txJson });
       const posture = resolveEffectivePosture(manifest, runtimeSignals);
       if (posture.writeOnly) {
-        return { submissionId: envelope.submissionId, writeOnly: true };
+        return { writeOnly: true };
       }
       return envelope;
     },

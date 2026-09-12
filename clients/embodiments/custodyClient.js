@@ -10,6 +10,7 @@
 
 import { createIdentityResolver } from "../../protocol/identity/identityClient.js";
 import { createWalletProofBase64 } from "../../protocol/walletProof.js";
+import { warnFoldedAuthority } from "../shywareConfig.js";
 import {
   applyStoreAnonLayerDefaults,
   assertStoreBackedAnonLayer
@@ -684,6 +685,7 @@ export function createCustodyClient({
 export function initializeFromShyConfig(shyconfig, options = {}) {
   applyStoreAnonLayerDefaults(shyconfig);
   assertCustodyManifest(shyconfig);
+  warnFoldedAuthority(shyconfig);
 
   if (
     shyconfig.api?.requires_auth &&

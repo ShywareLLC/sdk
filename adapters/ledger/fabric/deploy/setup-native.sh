@@ -15,7 +15,13 @@ DATA_DIR=/home/ubuntu/fabric-native      # ledger storage, not crypto material
 CHANNEL=shyware
 CHAINCODE_NAME=shyware
 CHAINCODE_VERSION=2.0
-CHAINCODE_SEQUENCE=1
+# Overridable: some deployments have already committed a chaincode definition
+# at a sequence number other than 1 (Fabric requires --sequence to match the
+# next expected value for approve/commit, not always 1 on a fresh org). Set
+# SHYWARE_CHAINCODE_SEQUENCE to match your deployment's actual current
+# sequence + 1 if this isn't the first definition ever committed on this
+# channel.
+CHAINCODE_SEQUENCE="${SHYWARE_CHAINCODE_SEQUENCE:-1}"
 resolve_chaincode_dir() {
   if [ -n "${SHYWARE_CHAINCODE_DIR:-}" ]; then
     cd "${SHYWARE_CHAINCODE_DIR}" && pwd
