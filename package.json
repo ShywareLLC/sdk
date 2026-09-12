@@ -1,6 +1,6 @@
 {
   "name": "@shyware/sdk",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Structurally anonymous distributed-ledger protocol SDK. Non-linkability by write architecture — not policy.",
   "type": "module",
   "main": "./index.js",
@@ -81,6 +81,7 @@
     "./protocol/sealer": "./protocol/sealer.js",
     "./protocol/anonLayer": "./protocol/anonLayer.js",
     "./protocol/walletProof": "./protocol/walletProof.js",
+    "./protocol/submissionId": "./protocol/submissionId.js",
     "./protocol/identity": "./protocol/identity/identityClient.js",
     "./protocol/idv": "./protocol/identity/shyIDVClient.js",
     "./protocol/zkp": "./protocol/zkp/zkpClient.js",
