@@ -29,6 +29,8 @@ function normalizeObjectInput(input = {}) {
     sourceProvider: trim(input.sourceProvider),
     proofHash: trim(input.proofHash),
     verificationStatus: trim(input.verificationStatus),
+    subjectId: trim(input.subjectId),
+    credentialId: trim(input.credentialId),
   }
 }
 
@@ -65,6 +67,20 @@ export function getIdentityProfile(manifest = {}) {
       placeholder: "0xabc123...",
       proofLabel: "Wallet proof",
       supportsAttestedIdentity: false,
+      ...policy,
+    }
+  }
+
+  if (provider === "identus") {
+    return {
+      provider,
+      mode,
+      workflowId,
+      issuerDid,
+      inputLabel: "Identus attested credential (subject id)",
+      placeholder: "did:prism:... or subject id",
+      proofLabel: "Identus presentation proof",
+      supportsAttestedIdentity: true,
       ...policy,
     }
   }
@@ -116,6 +132,24 @@ function normalizeProviderInput(manifest = {}, input) {
     return { personId: value, journeyId: value }
   }
 
+  const provider = getManifestIdentity(manifest).provider ?? "none"
+  if (provider === "identus" && normalized && !normalized.subjectId && (normalized.personId || normalized.journeyId)) {
+    // Wrap a foreign, already-verified identity (e.g. a Didit person/journey
+    // id) into an Identus-shaped provider input: the underlying verified
+    // identifier becomes the attested subject id, and doubles as the
+    // credential id when the source provider didn't separately mint one.
+    // This lets a deployment accept Didit-managed verification up front and
+    // still present it through the Identus attested-credential path
+    // downstream (e.g. shyshares DAO governance) without a second, separate
+    // verification flow.
+    const subjectId = trim(normalized.personId || normalized.journeyId)
+    return {
+      ...normalized,
+      subjectId,
+      credentialId: trim(normalized.credentialId || subjectId),
+    }
+  }
+
   return normalized ?? normalizeObjectInput(input)
 }
 
@@ -128,6 +162,14 @@ function buildStableIdentitySource(manifest = {}, input = {}) {
       provider,
       trim(normalized.walletAddress || normalized.value).toLowerCase(),
       "walletAddress is required for wallet commitments.",
+    )
+  }
+
+  if (provider === "identus") {
+    return requireIdentityValue(
+      provider,
+      trim(normalized.subjectId || normalized.credentialId || normalized.personId || normalized.journeyId || normalized.value),
+      "subjectId is required for identus identity commitments.",
     )
   }
 

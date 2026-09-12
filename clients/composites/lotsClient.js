@@ -245,8 +245,11 @@ export function createLotsClient({
       amount,
       timestamp
     }) {
+      // wireClient.buildWire's asset-identifying param is named scopingId,
+      // not assetId -- passing assetId through unrenamed silently produces
+      // an undefined asset_id on the built envelope.
       return wireClient.buildWire({
-        assetId,
+        scopingId: assetId,
         senderCommitment,
         recipientCommitment,
         amount,
@@ -254,10 +257,13 @@ export function createLotsClient({
       });
     },
     submitBidBondTransfer: (txJson) => wireClient.submitWire(txJson),
-    async transferBidBond(args) {
+    async transferBidBond({ assetId, senderCommitment, recipientCommitment, amount, timestamp }) {
       return wireClient.wireSubmission({
-        assetId: args.assetId ?? lotsProfile.settlementAssetId,
-        ...args
+        scopingId: assetId ?? lotsProfile.settlementAssetId,
+        senderCommitment,
+        recipientCommitment,
+        amount,
+        timestamp
       });
     },
     async buildAwardSettlementTransfer({
@@ -268,7 +274,7 @@ export function createLotsClient({
       timestamp
     }) {
       return wireClient.buildWire({
-        assetId,
+        scopingId: assetId,
         senderCommitment,
         recipientCommitment,
         amount,
@@ -277,10 +283,13 @@ export function createLotsClient({
     },
     submitAwardSettlementTransfer: (txJson) =>
       wireClient.submitWire(txJson),
-    async settleAwardTransfer(args) {
+    async settleAwardTransfer({ assetId, senderCommitment, recipientCommitment, amount, timestamp }) {
       return wireClient.wireSubmission({
-        assetId: args.assetId ?? lotsProfile.settlementAssetId,
-        ...args
+        scopingId: assetId ?? lotsProfile.settlementAssetId,
+        senderCommitment,
+        recipientCommitment,
+        amount,
+        timestamp
       });
     },
     createFundingIntent: (args, options = {}) =>
