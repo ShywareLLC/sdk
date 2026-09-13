@@ -77,7 +77,11 @@ export class FabricLedgerInterface extends LedgerInterface {
           url: peerTlsOff ? `grpc://${peerEndpoint}` : `grpcs://${peerEndpoint}`,
           ...(peerTlsOff ? {} : { tlsCACerts: { pem: tlsPem } }),
           grpcOptions: {
-            ...(mode === 'local' && !peerTlsOff ? { 'ssl-target-name-override': peerEndpoint.split(':')[0] } : {}),
+            // Must match the peer TLS cert's own SAN (peerId), not whatever
+            // host/IP we actually dial (localhost) -- a mismatch here fails
+            // TLS hostname verification silently, surfacing only as a
+            // connectivity-state timeout, never an explicit TLS error.
+            ...(mode === 'local' && !peerTlsOff ? { 'ssl-target-name-override': peerId } : {}),
             'grpc-wait-for-ready-timeout': 10000,
           },
         },
