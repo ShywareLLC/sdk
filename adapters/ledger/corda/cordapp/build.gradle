@@ -1,0 +1,60 @@
+buildscript {
+    repositories {
+        mavenCentral()
+        maven { url 'https://software.r3.com/artifactory/corda' }
+    }
+
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath "net.corda.plugins:cordapp:$corda_gradle_plugins_version"
+        classpath "net.corda.plugins:cordformation:$corda_gradle_plugins_version"
+        classpath "net.corda.plugins:quasar-utils:$corda_gradle_plugins_version"
+    }
+}
+
+allprojects {
+    apply plugin: 'kotlin'
+
+    repositories {
+        mavenCentral()
+        maven { url 'https://software.r3.com/artifactory/corda' }
+        maven { url 'https://software.r3.com/artifactory/corda-dependencies' }
+    }
+
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            languageVersion = "1.2"
+            apiVersion = "1.2"
+            jvmTarget = "1.8"
+            javaParameters = true
+        }
+    }
+}
+
+apply plugin: 'net.corda.plugins.cordformation'
+
+// `./gradlew deployNodes` materializes a runnable local network under
+// build/nodes/{Notary,ShywareOperator}, each with its own node.conf, so the CorDapp
+// can be driven by a real node process (not just the in-process `driver` test) when
+// a full JDK-8 + Gradle-6.x Corda toolchain is available to run it.
+task deployNodes(type: net.corda.plugins.Cordform, dependsOn: ['jar']) {
+    nodeDefaults {
+        cordapp project(':contracts')
+        cordapp project(':workflows')
+    }
+    node {
+        name "O=Notary,L=New York,C=US"
+        notary = [validating: false]
+        p2pPort 10002
+        rpcSettings { address("localhost:10003"); adminAddress("localhost:10013") }
+    }
+    node {
+        name "O=ShywareOperator,L=New York,C=US"
+        p2pPort 10005
+        rpcSettings { address("localhost:10006"); adminAddress("localhost:10016") }
+        rpcUsers = [[user: "shyware", password: "changeme", permissions: ["ALL"]]]
+    }
+}

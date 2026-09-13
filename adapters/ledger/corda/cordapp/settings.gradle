@@ -1,0 +1,5 @@
+rootProject.name = 'shyware-corda-cordapp'
+
+include 'contracts'
+include 'workflows'
+include 'webserver'
