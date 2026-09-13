@@ -1,0 +1,15 @@
+{
+  "name": "shyware-ethereum-adapter-devtools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dev-only Hardhat project for compiling ShywareTwoList.sol and end-to-end testing ../ethereum.js (EthereumLedgerInterface). Not part of the published @shyware/sdk package.",
+  "type": "commonjs",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "node --test test/ethereum.e2e.test.mjs"
+  },
+  "devDependencies": {
+    "ethers": "^6.17.0",
+    "hardhat": "^2.29.1"
+  }
+}
