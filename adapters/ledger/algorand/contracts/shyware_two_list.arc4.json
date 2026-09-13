@@ -1,0 +1,114 @@
+{
+  "name": "ShywareTwoList",
+  "methods": [
+    {
+      "name": "submit_two_list_write",
+      "args": [
+        {
+          "type": "string",
+          "name": "scoping_id"
+        },
+        {
+          "type": "string",
+          "name": "submission_id"
+        },
+        {
+          "type": "string",
+          "name": "payload_commitment"
+        },
+        {
+          "type": "string",
+          "name": "identity_hash"
+        }
+      ],
+      "returns": {
+        "type": "(uint64,uint64,bool)"
+      }
+    },
+    {
+      "name": "get_count",
+      "args": [
+        {
+          "type": "string",
+          "name": "scoping_id"
+        }
+      ],
+      "returns": {
+        "type": "(uint64,uint64,bool)"
+      }
+    },
+    {
+      "name": "rescind_two_list_write",
+      "args": [
+        {
+          "type": "string",
+          "name": "scoping_id"
+        },
+        {
+          "type": "string",
+          "name": "submission_id"
+        },
+        {
+          "type": "string",
+          "name": "identity_hash"
+        }
+      ],
+      "returns": {
+        "type": "(bool,bool)"
+      }
+    },
+    {
+      "name": "replace_two_list_write",
+      "args": [
+        {
+          "type": "string",
+          "name": "scoping_id"
+        },
+        {
+          "type": "string",
+          "name": "old_submission_id"
+        },
+        {
+          "type": "string",
+          "name": "new_submission_id"
+        },
+        {
+          "type": "string",
+          "name": "new_payload_commitment"
+        },
+        {
+          "type": "string",
+          "name": "identity_hash"
+        }
+      ],
+      "returns": {
+        "type": "(bool,bool)"
+      }
+    },
+    {
+      "name": "commit_period_close",
+      "args": [
+        {
+          "type": "string",
+          "name": "scoping_id"
+        },
+        {
+          "type": "string",
+          "name": "l1_merkle_root"
+        },
+        {
+          "type": "string",
+          "name": "l2_merkle_root"
+        },
+        {
+          "type": "string",
+          "name": "attestation"
+        }
+      ],
+      "returns": {
+        "type": "(bool,uint64)"
+      }
+    }
+  ],
+  "networks": {}
+}

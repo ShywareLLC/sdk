@@ -1,0 +1,626 @@
+#pragma version 8
+txn NumAppArgs
+int 0
+==
+bnz main_l12
+txna ApplicationArgs 0
+method "submit_two_list_write(string,string,string,string)(uint64,uint64,bool)"
+==
+bnz main_l11
+txna ApplicationArgs 0
+method "get_count(string)(uint64,uint64,bool)"
+==
+bnz main_l10
+txna ApplicationArgs 0
+method "rescind_two_list_write(string,string,string)(bool,bool)"
+==
+bnz main_l9
+txna ApplicationArgs 0
+method "replace_two_list_write(string,string,string,string,string)(bool,bool)"
+==
+bnz main_l8
+txna ApplicationArgs 0
+method "commit_period_close(string,string,string,string)(bool,uint64)"
+==
+bnz main_l7
+err
+main_l7:
+txn OnCompletion
+int NoOp
+==
+txn ApplicationID
+int 0
+!=
+&&
+assert
+callsub commitperiodclosecaster_9
+int 1
+return
+main_l8:
+txn OnCompletion
+int NoOp
+==
+txn ApplicationID
+int 0
+!=
+&&
+assert
+callsub replacetwolistwritecaster_8
+int 1
+return
+main_l9:
+txn OnCompletion
+int NoOp
+==
+txn ApplicationID
+int 0
+!=
+&&
+assert
+callsub rescindtwolistwritecaster_7
+int 1
+return
+main_l10:
+txn OnCompletion
+int NoOp
+==
+txn ApplicationID
+int 0
+!=
+&&
+assert
+callsub getcountcaster_6
+int 1
+return
+main_l11:
+txn OnCompletion
+int NoOp
+==
+txn ApplicationID
+int 0
+!=
+&&
+assert
+callsub submittwolistwritecaster_5
+int 1
+return
+main_l12:
+txn OnCompletion
+int NoOp
+==
+bnz main_l14
+err
+main_l14:
+txn ApplicationID
+int 0
+==
+assert
+int 1
+return
+
+// submit_two_list_write
+submittwolistwrite_0:
+proto 4 1
+byte ""
+int 0
+dupn 4
+byte ""
+dup
+frame_dig -4
+extract 2 0
+len
+int 0
+>
+assert
+frame_dig -3
+extract 2 0
+len
+int 0
+>
+assert
+frame_dig -2
+extract 2 0
+len
+int 0
+>
+assert
+frame_dig -1
+extract 2 0
+len
+int 0
+>
+assert
+frame_dig -3
+extract 2 0
+sha256
+frame_dig -1
+extract 2 0
+!=
+assert
+byte "L1"
+frame_dig -4
+extract 2 0
+byte "|"
+concat
+frame_dig -3
+extract 2 0
+concat
+sha256
+concat
+store 0
+byte "L2"
+frame_dig -4
+extract 2 0
+byte "|"
+concat
+frame_dig -1
+extract 2 0
+concat
+sha256
+concat
+store 1
+byte "CN"
+frame_dig -4
+extract 2 0
+sha256
+concat
+store 2
+load 1
+int 1
+box_create
+assert
+load 1
+int 0
+byte 0x01
+box_replace
+load 0
+frame_dig -2
+extract 2 0
+len
+box_create
+assert
+load 0
+int 0
+frame_dig -2
+extract 2 0
+box_replace
+load 2
+box_get
+store 5
+store 4
+load 5
+bnz submittwolistwrite_0_l2
+int 0
+b submittwolistwrite_0_l3
+submittwolistwrite_0_l2:
+load 4
+btoi
+submittwolistwrite_0_l3:
+int 1
++
+store 3
+load 2
+load 3
+itob
+box_put
+load 3
+frame_bury 1
+load 3
+frame_bury 2
+int 1
+!
+!
+frame_bury 3
+frame_dig 1
+itob
+frame_dig 2
+itob
+concat
+byte 0x00
+int 0
+frame_dig 3
+setbit
+concat
+frame_bury 0
+retsub
+
+// get_count
+getcount_1:
+proto 1 1
+byte ""
+int 0
+dupn 4
+byte ""
+dup
+byte "CN"
+frame_dig -1
+extract 2 0
+sha256
+concat
+box_get
+store 7
+store 6
+load 7
+bnz getcount_1_l2
+int 0
+b getcount_1_l3
+getcount_1_l2:
+load 6
+btoi
+getcount_1_l3:
+store 8
+load 8
+frame_bury 1
+load 8
+frame_bury 2
+int 1
+!
+!
+frame_bury 3
+frame_dig 1
+itob
+frame_dig 2
+itob
+concat
+byte 0x00
+int 0
+frame_dig 3
+setbit
+concat
+frame_bury 0
+retsub
+
+// rescind_two_list_write
+rescindtwolistwrite_2:
+proto 3 1
+byte ""
+int 0
+dupn 3
+byte ""
+dup
+byte "L1"
+frame_dig -3
+extract 2 0
+byte "|"
+concat
+frame_dig -2
+extract 2 0
+concat
+sha256
+concat
+store 9
+byte "L2"
+frame_dig -3
+extract 2 0
+byte "|"
+concat
+frame_dig -1
+extract 2 0
+concat
+sha256
+concat
+store 10
+byte "CN"
+frame_dig -3
+extract 2 0
+sha256
+concat
+store 11
+load 9
+box_del
+assert
+load 10
+box_del
+assert
+load 11
+box_get
+store 13
+store 12
+load 13
+assert
+load 12
+btoi
+int 1
+-
+store 14
+load 11
+load 14
+itob
+box_put
+int 1
+!
+!
+frame_bury 1
+int 1
+!
+!
+frame_bury 2
+byte 0x00
+int 0
+frame_dig 1
+setbit
+int 1
+frame_dig 2
+setbit
+frame_bury 0
+retsub
+
+// replace_two_list_write
+replacetwolistwrite_3:
+proto 5 1
+byte ""
+int 0
+dupn 3
+byte ""
+dup
+frame_dig -3
+extract 2 0
+len
+int 0
+>
+assert
+frame_dig -2
+extract 2 0
+len
+int 0
+>
+assert
+frame_dig -3
+extract 2 0
+sha256
+frame_dig -1
+extract 2 0
+!=
+assert
+byte "L2"
+frame_dig -5
+extract 2 0
+byte "|"
+concat
+frame_dig -1
+extract 2 0
+concat
+sha256
+concat
+box_len
+store 18
+store 17
+load 18
+assert
+byte "L1"
+frame_dig -5
+extract 2 0
+byte "|"
+concat
+frame_dig -4
+extract 2 0
+concat
+sha256
+concat
+store 15
+byte "L1"
+frame_dig -5
+extract 2 0
+byte "|"
+concat
+frame_dig -3
+extract 2 0
+concat
+sha256
+concat
+store 16
+load 15
+box_del
+assert
+load 16
+frame_dig -2
+extract 2 0
+len
+box_create
+assert
+load 16
+int 0
+frame_dig -2
+extract 2 0
+box_replace
+int 1
+!
+!
+frame_bury 1
+int 1
+!
+!
+frame_bury 2
+byte 0x00
+int 0
+frame_dig 1
+setbit
+int 1
+frame_dig 2
+setbit
+frame_bury 0
+retsub
+
+// commit_period_close
+commitperiodclose_4:
+proto 4 1
+byte ""
+int 0
+dupn 3
+byte ""
+dup
+frame_dig -3
+extract 2 0
+len
+int 32
+==
+assert
+frame_dig -2
+extract 2 0
+len
+int 32
+==
+assert
+frame_dig -1
+extract 2 0
+len
+int 0
+>
+assert
+byte "PC"
+frame_dig -4
+extract 2 0
+sha256
+concat
+store 19
+frame_dig -3
+extract 2 0
+frame_dig -2
+extract 2 0
+concat
+frame_dig -1
+extract 2 0
+concat
+store 20
+global LatestTimestamp
+store 21
+load 19
+load 20
+len
+box_create
+assert
+load 19
+int 0
+load 20
+box_replace
+int 1
+!
+!
+frame_bury 1
+load 21
+frame_bury 2
+byte 0x00
+int 0
+frame_dig 1
+setbit
+frame_dig 2
+itob
+concat
+frame_bury 0
+retsub
+
+// submit_two_list_write_caster
+submittwolistwritecaster_5:
+proto 0 0
+byte ""
+dupn 4
+txna ApplicationArgs 1
+frame_bury 1
+txna ApplicationArgs 2
+frame_bury 2
+txna ApplicationArgs 3
+frame_bury 3
+txna ApplicationArgs 4
+frame_bury 4
+frame_dig 1
+frame_dig 2
+frame_dig 3
+frame_dig 4
+callsub submittwolistwrite_0
+frame_bury 0
+byte 0x151f7c75
+frame_dig 0
+concat
+log
+retsub
+
+// get_count_caster
+getcountcaster_6:
+proto 0 0
+byte ""
+dup
+txna ApplicationArgs 1
+frame_bury 1
+frame_dig 1
+callsub getcount_1
+frame_bury 0
+byte 0x151f7c75
+frame_dig 0
+concat
+log
+retsub
+
+// rescind_two_list_write_caster
+rescindtwolistwritecaster_7:
+proto 0 0
+byte ""
+dupn 3
+txna ApplicationArgs 1
+frame_bury 1
+txna ApplicationArgs 2
+frame_bury 2
+txna ApplicationArgs 3
+frame_bury 3
+frame_dig 1
+frame_dig 2
+frame_dig 3
+callsub rescindtwolistwrite_2
+frame_bury 0
+byte 0x151f7c75
+frame_dig 0
+concat
+log
+retsub
+
+// replace_two_list_write_caster
+replacetwolistwritecaster_8:
+proto 0 0
+byte ""
+dupn 5
+txna ApplicationArgs 1
+frame_bury 1
+txna ApplicationArgs 2
+frame_bury 2
+txna ApplicationArgs 3
+frame_bury 3
+txna ApplicationArgs 4
+frame_bury 4
+txna ApplicationArgs 5
+frame_bury 5
+frame_dig 1
+frame_dig 2
+frame_dig 3
+frame_dig 4
+frame_dig 5
+callsub replacetwolistwrite_3
+frame_bury 0
+byte 0x151f7c75
+frame_dig 0
+concat
+log
+retsub
+
+// commit_period_close_caster
+commitperiodclosecaster_9:
+proto 0 0
+byte ""
+dupn 4
+txna ApplicationArgs 1
+frame_bury 1
+txna ApplicationArgs 2
+frame_bury 2
+txna ApplicationArgs 3
+frame_bury 3
+txna ApplicationArgs 4
+frame_bury 4
+frame_dig 1
+frame_dig 2
+frame_dig 3
+frame_dig 4
+callsub commitperiodclose_4
+frame_bury 0
+byte 0x151f7c75
+frame_dig 0
+concat
+log
+retsub
