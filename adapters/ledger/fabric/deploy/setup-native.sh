@@ -322,7 +322,18 @@ chmod +x /home/ubuntu/ccaas-builder/bin/build
 cat > /home/ubuntu/ccaas-builder/bin/release << 'RELEASE'
 #!/bin/bash
 SOURCE=$1; OUTPUT=$2
-cp ${SOURCE}/connection.json ${OUTPUT}/
+# Fabric's externalbuilder.Instance.ChaincodeServerInfo() (core/container/
+# externalbuilder/instance.go) reads connection.json from
+# <release_dir>/chaincode/server/connection.json specifically -- NOT
+# <release_dir>/connection.json. A miss here is silent (os.IsNotExist ->
+# returns nil, nil, no error) and makes the peer fall through to the
+# "default peer-as-server" launch model: it invokes run and then waits for
+# the chaincode to dial *into* the peer, which a CHAINCODE_SERVER_ADDRESS
+# (server-mode) chaincode never does -- manifesting only as a silent
+# startuptimeout ("chaincode registration failed") with zero packets ever
+# sent to the chaincode's port.
+mkdir -p ${OUTPUT}/chaincode/server
+cp ${SOURCE}/connection.json ${OUTPUT}/chaincode/server/
 RELEASE
 chmod +x /home/ubuntu/ccaas-builder/bin/release
 
@@ -467,10 +478,26 @@ echo "▶ Packaging ccaas chaincode (seq ${CHAINCODE_SEQUENCE})..."
 # Embed peer's TLS CA cert so the peer can verify the chaincode server's TLS cert.
 # The chaincode binary uses CHAINCODE_TLS_CERT/KEY (the peer's server.crt/server.key)
 # so the peer CA cert already trusts it.
-ROOT_CERT_B64=$(cat "${PEER_TLS}/ca.crt" | base64 -w 0)
+# root_cert must be the raw PEM text (JSON-string-escaped), not base64: Fabric's
+# ChaincodeServerUserData.RootCert (core/container/externalbuilder/instance.go)
+# is cast directly to bytes and handed to x509.AppendCertsFromPEM -- base64 text
+# there fails PEM parsing ("error adding root certificate") since the decoded
+# JSON string never contains a literal "-----BEGIN CERTIFICATE-----" line.
 mkdir -p /tmp/ccaas-pkg
-printf '{"address":"127.0.0.1:9999","dial_timeout":"30s","tls_required":true,"client_auth_required":false,"root_cert":"%s"}' \
-  "${ROOT_CERT_B64}" > /tmp/ccaas-pkg/connection.json
+python3 -c "
+import json
+with open('${PEER_TLS}/ca.crt') as f:
+    root_cert = f.read()
+conn = {
+    'address': '127.0.0.1:9999',
+    'dial_timeout': '30s',
+    'tls_required': True,
+    'client_auth_required': False,
+    'root_cert': root_cert,
+}
+with open('/tmp/ccaas-pkg/connection.json', 'w') as f:
+    json.dump(conn, f)
+"
 cd /tmp/ccaas-pkg && tar czf /tmp/ccaas-code.tar.gz connection.json
 mkdir -p /tmp/ccaas-final
 printf '{"type":"ccaas","label":"%s_%s"}' "${CHAINCODE_NAME}" "${CHAINCODE_VERSION}" \
