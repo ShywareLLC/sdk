@@ -26,6 +26,10 @@
     "./adapters/ledger/dynamodb": "./adapters/ledger/dynamodb.js",
     "./adapters/ledger/memory": "./adapters/ledger/memory.js",
     "./adapters/ledger/coverTraffic": "./adapters/ledger/coverTraffic.js",
+    "./adapters/ledger/cometbft": "./adapters/ledger/cometbft.js",
+    "./adapters/ledger/ethereum": "./adapters/ledger/ethereum.js",
+    "./adapters/ledger/algorand": "./adapters/ledger/algorand.js",
+    "./adapters/ledger/corda": "./adapters/ledger/corda.js",
     "./adapters/migration": {
       "require": "./adapters/migration/engine.cjs",
       "default": "./adapters/migration/index.js"
