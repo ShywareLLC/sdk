@@ -70,55 +70,160 @@ async function deriveSubmissionIdentifier({ nonceHex, payload, manifest }) {
   return sha256hex(nonceHex);
 }
 
+// Fetches a fresh beacon (recent canonical block hash + height) from the
+// relay's own CometBFT-backed /health endpoint. Required on every ballot:
+// the Go core's ValidateBeacon does an exact (post-lowercasing) string
+// comparison against its own beacon window, and rejects anything stale or
+// malformed (ShywareLLC/core domain/state -- see VotingClient.swift's
+// fetchBeacon for the exact iOS-side equivalent this mirrors).
+async function fetchBeacon(getFn) {
+  const status = await getFn("/health");
+  const height = Number(status?.result?.sync_info?.latest_block_height);
+  if (!Number.isFinite(height)) {
+    throw new Error("Invalid latest_block_height in /health response");
+  }
+  const hash = String(status?.result?.sync_info?.latest_block_hash ?? "").toLowerCase();
+  return { hash, height };
+}
+
+// Requests idv_attestation_sig from the deployment's own IDV attestation
+// enclave (identity.attestation_service_base_url) -- an independent service
+// that re-verifies the Didit session against Didit's real API before
+// signing, so this device/app never holds (and the Populist backend never
+// needs to hold) the enclave's private signing key. Mirrors
+// EnclaveAttestationClient.attest in ShywareLLC/sdk-ios exactly, except:
+// browsers have no public API for certificate/public-key pinning on a
+// fetch() call, so unlike the iOS client this cannot pin the enclave's
+// certificate -- it relies on ordinary browser TLS/CA trust instead. That
+// is a real, accepted limitation of the browser platform, not an oversight;
+// note it rather than silently claiming parity with the pinned iOS path.
+async function attestWithEnclave({ manifest, sessionId, voterPubKeyHex, pollId }) {
+  const baseURL = manifest?.identity?.attestation_service_base_url;
+  if (!baseURL || !sessionId) return null;
+  const res = await fetch(`${baseURL.replace(/\/$/, "")}/attest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      voter_pub_key: voterPubKeyHex,
+      poll_id: pollId
+    })
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `Enclave attestation HTTP ${res.status}`);
+  }
+  const decoded = await res.json();
+  return decoded.idv_attestation_sig; // hex string -- re-encoded to base64 by the caller
+}
+
+function hexToBase64(hexStr) {
+  const bytes = new Uint8Array(hexStr.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hexStr.substr(i * 2, 2), 16);
+  }
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function bufToHex(buf) {
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function bufToBase64(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)));
+}
+
+/// Builds a TxTypeBallotCast envelope matching the real server's wire schema
+/// exactly (ShywareLLC/core protocol/tx/tx.go BallotCastData) -- field names,
+/// the oracle-forgery-prevention device signature, the beacon, and the IDV
+/// attestation are all required by the Go core's validateBallotCast; a
+/// previous version of this function sent none of them (a client-computed
+/// identity_hash instead, which the server never reads off the wire -- it
+/// always re-derives identity_hash itself from voter_pub_key) and would
+/// have been rejected outright by the real relay. Mirrors
+/// VotingClient.buildBallot in ShywareLLC/sdk-ios field-for-field.
 async function buildVoteEnvelope({
   manifest,
   scopingId,
   payload,
-  personId,
-  identityInput = null,
-  proofHash = null
+  diditSessionId = null,
+  partitionId = undefined,
+  getFn,
+  keypair = null
 }) {
   const nonceBytes = requiredWebCrypto().getRandomValues(new Uint8Array(32));
-  const hexNonce = Array.from(nonceBytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  const submissionId = await deriveSubmissionIdentifier({
-    nonceHex: hexNonce,
-    payload,
-    manifest
-  });
-  const submissionIdentifierDerivation =
-    resolveSubmissionIdentifierDerivationMode(manifest);
-  const identityResolver = createIdentityResolver(manifest);
-  const identityCommitment = await identityResolver.createCommitment(
-    identityInput ?? personId,
-    {
-      namespace: "stable_identity"
-    }
-  );
-  const identityHash = await sha256hex(identityCommitment + scopingId);
-  const resolvedProofHash =
-    proofHash ??
-    (await identityResolver.createProofHash(identityInput ?? personId, {
-      scope: scopingId,
-      audience: manifest?.app?.id ?? "shyprotocol"
-    }));
+  const hexNonce = bufToHex(nonceBytes);
+  const choices = Array.isArray(payload) ? payload : [payload];
+
+  // Per-poll Ed25519 keypair -- the IDV provider never holds this private
+  // key (oracle-forgery prevention), only the resulting voter_pub_key/
+  // voter_sig ever leave this function.
+  //
+  // Pass an existing keypair (e.g. persisted in localStorage, one per
+  // (user, poll)) rather than relying on the default fresh-every-call
+  // generation below whenever a call might be retried -- generating a new
+  // keypair on every attempt means every retry after a transient failure
+  // (network blip, an unrelated downstream error) looks like a *different*
+  // voter to the IDV attestation enclave's one-time-use-per-poll replay
+  // guard, permanently orphaning that poll for the underlying Didit
+  // session on the very first failed attempt. Found live 2026-10-03 on the
+  // iOS client, which had exactly this bug (VotingClient.buildBallot
+  // generated Curve25519.Signing.PrivateKey() fresh every call) --
+  // mirroring it here would just move the same bug to the web client.
+  if (!keypair) {
+    keypair = await requiredWebCrypto().subtle.generateKey(
+      { name: "Ed25519" },
+      true,
+      ["sign", "verify"]
+    );
+  }
+  const pubKeyRaw = await requiredWebCrypto().subtle.exportKey("raw", keypair.publicKey);
+  const voterPubKeyHex = bufToHex(pubKeyRaw);
+  const deviceMsg = new TextEncoder().encode(`${hexNonce}:${scopingId}`);
+  const voterSigBuf = await requiredWebCrypto().subtle.sign("Ed25519", keypair.privateKey, deviceMsg);
+  const voterSigBase64 = bufToBase64(voterSigBuf);
+
+  const beacon = await fetchBeacon(getFn);
 
   const data = {
     scoping_id: scopingId,
-    identity_hash: identityHash,
-    choices: Array.isArray(payload) ? payload : [payload],
+    choices,
     submission_nonce: hexNonce,
-    submission_identifier_derivation: submissionIdentifierDerivation,
+    beacon_block_hash: beacon.hash,
+    beacon_block_height: beacon.height,
     timestamp: Math.floor(Date.now() / 1000),
-    ...(resolvedProofHash ? { idv_proof_hash: resolvedProofHash } : {})
+    voter_pub_key: voterPubKeyHex,
+    voter_sig: voterSigBase64,
+    ...(partitionId ? { partition_id: partitionId } : {})
   };
+
+  if (diditSessionId) {
+    const idvAttestationSigHex = await attestWithEnclave({
+      manifest,
+      sessionId: diditSessionId,
+      voterPubKeyHex,
+      pollId: scopingId
+    });
+    if (idvAttestationSigHex) {
+      data.idv_attestation_sig = hexToBase64(idvAttestationSigHex);
+      data.didit_session_id = diditSessionId;
+    }
+  }
+
+  // identity_hash is for local receipt bookkeeping only -- matches the Go
+  // core's own derivation (sha256(voter_pub_key || poll_id)) exactly, but is
+  // never sent on the wire; the server re-derives it itself and does not
+  // read an identity_hash field off BallotCastData at all.
+  const identityHash = await sha256hex(voterPubKeyHex + scopingId);
 
   return {
     txJson: JSON.stringify({ type: 2, signature: "AQ==", data }),
-    submissionId,
+    submissionId: await sha256hex(hexNonce),
     hexNonce,
-    identityHash
+    identityHash,
+    voterPubKeyHex
   };
 }
 
@@ -758,34 +863,40 @@ export function createVotingClient({
     normalizeByoid(input) {
       return identityResolver.normalizeByoid(input);
     },
+    // Path suffixes below are matched against the real relay's actual routes
+    // (ShywareLLC/core api/server/router.go) -- "/records" and
+    // "/participants" were never real routes on this relay; the real ones
+    // are "/votes" and "/voters".
     getAllSubmissions: (type = "polls") =>
       get(`/${type}`, { allowEmptyPolls: true }),
     getSubmission: (type, id) => get(`/${type}/${id}`),
     getSubmissionTally: (type, id) => get(`/${type}/${id}/tally`),
-    getSubmissionRecords: (type, id) => get(`/${type}/${id}/records`),
+    getSubmissionRecords: (type, id) => get(`/${type}/${id}/votes`),
     getSubmissionParticipantCount: (type, id) =>
-      get(`/${type}/${id}/participants`),
+      get(`/${type}/${id}/voters`),
     getSubmissionConfirmedCount: (type, id) => get(`/${type}/${id}/confirms`),
 
-    async buildVote({
-      scopingId,
-      payload,
-      personId = "",
-      identityInput = null,
-      proofHash = null
-    }) {
-      if (!scopingId || !payload || (!personId?.trim() && !identityInput)) {
-        throw new Error(
-          "scopingId, payload, and a personId or identityInput are required."
-        );
+    // personId/identityInput/proofHash were accepted here historically but
+    // never actually reached the wire -- the Go core's BallotCastData has no
+    // identity_hash field at all; it always re-derives identity_hash itself
+    // from voter_pub_key. For the default Didit-attestation embodiment
+    // (identity.provider: "didit"), the real identity-binding input the
+    // server needs is diditSessionId, passed to the IDV attestation enclave.
+    // Other identity modes (wallet, identus) are not yet wired into this
+    // corrected envelope -- narrowing this fix to the embodiment this
+    // deployment actually uses rather than guessing at the other two.
+    async buildVote({ scopingId, payload, diditSessionId = null, partitionId, keypair = null }) {
+      if (!scopingId || !payload) {
+        throw new Error("scopingId and payload are required.");
       }
       const envelope = await buildVoteEnvelope({
         manifest,
         scopingId,
         payload,
-        personId: personId.trim(),
-        identityInput,
-        proofHash
+        diditSessionId,
+        partitionId,
+        getFn: get,
+        keypair
       });
       const posture = resolveEffectivePosture(manifest, runtimeSignals);
       if (posture.writeOnly) {
@@ -794,27 +905,25 @@ export function createVotingClient({
       return envelope;
     },
 
-    submitVote: (txJson, type = "submissions") =>
+    // Defaults to "ballots" -- the real relay's actual route
+    // (ShywareLLC/core api/server/router.go: POST /ballots). The previous
+    // default, "submissions", is not a route this relay has at all.
+    submitVote: (txJson, type = "ballots") =>
       post(`/${type}`, { tx: txJson }),
 
     flushQueuedSubmissions: (type, id) => post(`/${type}/${id}/flush`, {}),
 
-    async voteSubmission({
-      scopingId,
-      payload,
-      personId = "",
-      identityInput = null,
-      proofHash = null
-    }) {
+    async voteSubmission({ scopingId, payload, diditSessionId = null, partitionId, keypair = null }) {
       const envelope = await buildVoteEnvelope({
         manifest,
         scopingId,
         payload,
-        personId: (personId ?? "").trim(),
-        identityInput,
-        proofHash
+        diditSessionId,
+        partitionId,
+        getFn: get,
+        keypair
       });
-      await post("/submissions", { tx: envelope.txJson });
+      await post("/ballots", { tx: envelope.txJson });
       const posture = resolveEffectivePosture(manifest, runtimeSignals);
       if (posture.writeOnly) {
         return { writeOnly: true };
@@ -867,9 +976,23 @@ export function createVotingClient({
         submittedAt: receipt.submittedAt
       });
     },
-    confirmReceipt: (scopingId) =>
-      post("/submission/confirm", { scopingId }),
+    // Matches the real route exactly: POST /polls/{poll_id}/confirm, no
+    // request body (scopingId is the path parameter, not a body field).
+    // The previous version posted to a path ("/submission/confirm") that
+    // isn't a route this relay has at all.
+    confirmReceipt: (scopingId) => post(`/polls/${scopingId}/confirm`, {}),
 
+    // checkSubmissionPresence / getReattestationAudit / getIdvAudit /
+    // getEligibilityActions below call routes that do not exist anywhere in
+    // the currently deployed relay (ShywareLLC/core api/server/router.go's
+    // route list is exhaustive: /health, /polls, /polls/{id}[/tally|/votes|
+    // /voters|/confirms|/confirm|/flush], /ballots, /ballots/update -- no
+    // /vote_exists, /reattestation_audit, /idv_audit, or /authority_actions
+    // route exists). These are left in place rather than silently pointed
+    // at a guessed path, since no server-side equivalent exists yet to
+    // guess at; calling any of them today will 404. Building the
+    // corresponding Go endpoints is a separate, larger task, not a client-
+    // side wiring fix.
     checkSubmissionPresence: (submissionId) => get(`/vote_exists/${submissionId}`),
 
     getReattestationAudit: (scopingId) => get(`/reattestation_audit/${scopingId}`),
