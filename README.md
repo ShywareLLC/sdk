@@ -62,7 +62,40 @@ Run `npm publish --access public` in an interactive TTY. When npm asks to press 
 import { createVotingClient } from '@shyware/sdk/clients/voting';
 
 const client = createVotingClient({ /* shyconfig */ });
+
+// Pass the SAME persisted per-poll keypair on every call for a given poll --
+// see "Per-poll key persistence" below for why this matters beyond avoiding
+// redundant work.
+const envelope = await client.voteSubmission({ scopingId, payload: 'yes', diditSessionId, keypair });
+
+// Change your mind, or rescind entirely -- oldSubmissionId comes from the
+// original cast's envelope.submissionId; keypair must be the SAME one used
+// to cast, since the chain re-derives identity_hash from voter_pub_key.
+await client.replaceVote({ scopingId, oldSubmissionId, newPayload: 'no', diditSessionId, keypair });
+await client.rescindVote({ scopingId, oldSubmissionId, diditSessionId, keypair });
 ```
+
+### Per-poll key persistence
+
+`buildVote`/`voteSubmission` accept an optional `keypair` (a WebCrypto
+`CryptoKeyPair`) instead of always generating one fresh. Generating a new
+keypair on every call means every retry after a transient failure looks like
+a *different* voter to the IDV attestation enclave's one-time-use-per-poll
+replay guard, permanently orphaning that poll for the underlying Didit
+session on the very first failed attempt — regardless of whether a ballot
+ever actually reached canonical state. Persist one keypair per `(user, poll)`
+(e.g. in `IndexedDB` or `localStorage`, non-extractable where possible) and
+pass it on every call for that poll, including retries and updates.
+
+### Didit identity provider
+
+`@shyware/sdk/providers/didit` exports `createDiditSession`,
+`getDiditSessionStatus`, and `extractDiditIdentity` — the real HTTP calls
+against your own backend's `/api/didit/create-session` and
+`/api/didit/status/:sessionId` routes (you implement those server-side;
+these just call them). Use these directly rather than going through
+`identityResolver`, which is deliberately provider-agnostic (shared across
+wallet/identus/didit) and has no HTTP knowledge of any specific provider.
 
 Full documentation: [docs.shyware.fyi](https://docs.shyware.fyi)
 
