@@ -73,6 +73,7 @@
     "./clients/custody": "./clients/embodiments/custodyClient.js",
     "./clients/contracts": "./clients/embodiments/contractsClient.js",
     "./clients/store": "./clients/embodiments/storeClient.js",
+    "./providers/didit": "./providers/didit.js",
     "./clients/browser": "./clients/embodiments/browserClient.js",
     "./clients/financing": "./clients/composites/financingClient.js",
     "./clients/rest": "./clients/composites/restClient.js",

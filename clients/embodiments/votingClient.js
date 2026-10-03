@@ -791,24 +791,72 @@ export function createVotingClient({
     return res.json();
   }
 
-  async function buildUpdateFields({ scopingId, personId = "", identityInput = null, proofHash = null }) {
-    const identityCommitment = await identityResolver.createCommitment(
-      identityInput ?? personId,
-      { namespace: "stable_identity" }
-    );
-    const identityHash = await sha256hex(identityCommitment + scopingId);
-    const resolvedProofHash = proofHash ??
-      (await identityResolver.createProofHash(identityInput ?? personId, {
-        scope: scopingId,
-        audience: manifest?.app?.id ?? "shyprotocol"
-      }));
+  /// Builds a TxTypeUpdateBallot envelope matching the real server's wire
+  /// schema (ShywareLLC/core protocol/tx/tx.go BallotUpdateData). The
+  /// previous version (buildUpdateFields) had the exact same bug
+  /// buildVoteEnvelope had before being fixed: no voter_pub_key/voter_sig/
+  /// beacon, a client-computed identity_hash the server never reads off
+  /// BallotUpdateData at all. `newChoices: []` represents a rescission.
+  ///
+  /// `keypair` is required (not optional, unlike buildVoteEnvelope's default
+  /// generate-if-absent) -- it must be the SAME keypair used for the
+  /// original cast, since the chain re-derives identity_hash from
+  /// voter_pub_key; a different key here would register as a different
+  /// voter, not an update to the existing one.
+  async function buildUpdateEnvelope({
+    manifest,
+    scopingId,
+    oldSubmissionId,
+    newChoices,
+    diditSessionId = null,
+    getFn,
+    keypair
+  }) {
+    if (!keypair) {
+      throw new Error("buildUpdateEnvelope requires the same keypair used to cast the original ballot.");
+    }
     const nonceBytes = requiredWebCrypto().getRandomValues(new Uint8Array(32));
-    const submissionNonce = Array.from(nonceBytes).map(b => b.toString(16).padStart(2, "0")).join("");
-    return {
+    const hexNonce = bufToHex(nonceBytes);
+    const pubKeyRaw = await requiredWebCrypto().subtle.exportKey("raw", keypair.publicKey);
+    const voterPubKeyHex = bufToHex(pubKeyRaw);
+    // "update:" prefix -- matches ballotrules.BallotUpdateDeviceSigMessage
+    // in ShywareLLC/core/protocol/ballotrules/ballotrules.go, distinguishing
+    // an update signature from a cast signature so one can't be replayed as
+    // the other.
+    const deviceMsg = new TextEncoder().encode(`update:${hexNonce}:${scopingId}`);
+    const voterSigBuf = await requiredWebCrypto().subtle.sign("Ed25519", keypair.privateKey, deviceMsg);
+
+    const beacon = await fetchBeacon(getFn);
+
+    const data = {
       scoping_id: scopingId,
-      new_submission_nonce: submissionNonce,
-      identity_hash: identityHash,
-      ...(resolvedProofHash ? { idv_proof_hash: resolvedProofHash } : {})
+      old_submission_id: oldSubmissionId,
+      new_submission_nonce: hexNonce,
+      beacon_block_hash: beacon.hash,
+      beacon_block_height: beacon.height,
+      new_choices: newChoices,
+      timestamp: Math.floor(Date.now() / 1000),
+      voter_pub_key: voterPubKeyHex,
+      voter_sig: bufToBase64(voterSigBuf)
+    };
+
+    if (diditSessionId) {
+      const idvAttestationSigHex = await attestWithEnclave({
+        manifest,
+        sessionId: diditSessionId,
+        voterPubKeyHex,
+        pollId: scopingId
+      });
+      if (idvAttestationSigHex) {
+        data.idv_attestation_sig = hexToBase64(idvAttestationSigHex);
+        data.didit_session_id = diditSessionId;
+      }
+    }
+
+    return {
+      txJson: JSON.stringify({ type: 6, signature: "AQ==", data }),
+      submissionId: await sha256hex(hexNonce),
+      hexNonce
     };
   }
 
@@ -931,14 +979,20 @@ export function createVotingClient({
       return envelope;
     },
 
-    async rescindVote({ scopingId, personId = "", identityInput = null, proofHash = null }) {
-      const fields = await buildUpdateFields({ scopingId, personId, identityInput, proofHash });
-      return post("/ballots/update", { ...fields, new_choices: [] });
+    // Device-receipt path (matches the real relay's two supported paths for
+    // POST /ballots/update): the client already holds oldSubmissionId from
+    // its own local receipt, so it builds and signs the full envelope
+    // itself rather than sending bare fields for the server to reconcile.
+    async rescindVote({ scopingId, oldSubmissionId, diditSessionId = null, keypair }) {
+      const envelope = await buildUpdateEnvelope({ manifest, scopingId, oldSubmissionId, newChoices: [], diditSessionId, getFn: get, keypair });
+      await post("/ballots/update", { tx: envelope.txJson });
+      return envelope;
     },
 
-    async replaceVote({ scopingId, newPayload, personId = "", identityInput = null, proofHash = null }) {
-      const fields = await buildUpdateFields({ scopingId, personId, identityInput, proofHash });
-      return post("/ballots/update", { ...fields, new_choices: [newPayload] });
+    async replaceVote({ scopingId, oldSubmissionId, newPayload, diditSessionId = null, keypair }) {
+      const envelope = await buildUpdateEnvelope({ manifest, scopingId, oldSubmissionId, newChoices: [newPayload], diditSessionId, getFn: get, keypair });
+      await post("/ballots/update", { tx: envelope.txJson });
+      return envelope;
     },
     verifyReceipt: (hexNonce, expectedPayload, submissions, options = {}) =>
       verifyReceipt(hexNonce, expectedPayload, submissions, {
