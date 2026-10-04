@@ -1,6 +1,6 @@
 {
   "name": "@shyware/sdk",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Structurally anonymous distributed-ledger protocol SDK. Non-linkability by write architecture — not policy.",
   "type": "module",
   "main": "./index.js",
@@ -74,6 +74,7 @@
     "./clients/contracts": "./clients/embodiments/contractsClient.js",
     "./clients/store": "./clients/embodiments/storeClient.js",
     "./providers/didit": "./providers/didit.js",
+    "./providers/registeredCredential": "./providers/registeredCredential.js",
     "./clients/browser": "./clients/embodiments/browserClient.js",
     "./clients/financing": "./clients/composites/financingClient.js",
     "./clients/rest": "./clients/composites/restClient.js",

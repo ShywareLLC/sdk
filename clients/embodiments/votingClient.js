@@ -7,6 +7,12 @@
  */
 
 import { createIdentityResolver } from "../../protocol/identity/identityClient.js";
+import {
+  getOrCreateRegisteredCredential,
+  signWithRegisteredCredential,
+  registerDeviceCredential,
+  hasRegisteredCredential
+} from "../../providers/registeredCredential.js";
 
 export const SUBMISSION_MANIFEST_CONTRACT_VERSION = "shyvoting-v1"; // For compatibility, but protocol is general
 export const VOTING_MANIFEST_CONTRACT_VERSION = "shyvoting-v1";
@@ -135,6 +141,27 @@ function bufToBase64(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf)));
 }
 
+// Registered-credential embodiment: when this browser has already
+// registered a credential (providers/registeredCredential.js), every
+// ballot cast/update is authorized by it instead of requiring a fresh
+// Didit session per vote -- see services/identity/registered_credential.go
+// on the chain side for the exact message/signature scheme this mirrors.
+// Returns {} (no fields added) when no credential is registered yet, so
+// callers fall through to the existing per-poll-key + Didit-attestation
+// path unchanged.
+async function buildRegistrationFields({ voterPubKeyHex, scopingId, prefix }) {
+  if (!(await hasRegisteredCredential())) return {};
+  const { privateKey, publicKeyHex } = await getOrCreateRegisteredCredential();
+  const sigDer = await signWithRegisteredCredential(
+    privateKey,
+    `${prefix}${voterPubKeyHex}:${scopingId}`
+  );
+  return {
+    registration_pub_key: publicKeyHex,
+    registration_sig: bufToBase64(sigDer)
+  };
+}
+
 /// Builds a TxTypeBallotCast envelope matching the real server's wire schema
 /// exactly (ShywareLLC/core protocol/tx/tx.go BallotCastData) -- field names,
 /// the oracle-forgery-prevention device signature, the beacon, and the IDV
@@ -196,10 +223,19 @@ async function buildVoteEnvelope({
     timestamp: Math.floor(Date.now() / 1000),
     voter_pub_key: voterPubKeyHex,
     voter_sig: voterSigBase64,
-    ...(partitionId ? { partition_id: partitionId } : {})
+    ...(partitionId ? { partition_id: partitionId } : {}),
+    ...(await buildRegistrationFields({ voterPubKeyHex, scopingId, prefix: "vote:" }))
   };
 
-  if (diditSessionId) {
+  // Mutually exclusive with the registered-credential path above: once
+  // data.registration_pub_key is set, the chain's deriveBallotIdentityHash
+  // (ShywareLLC/core domain/state/registration.go) ignores IdvAttestationSig/
+  // DiditSessionID entirely for identity derivation, but validateBallotCast's
+  // global one-session-ever check still runs unconditionally on
+  // data.didit_session_id if present -- so skip it here rather than risk
+  // tripping ErrorSessionAlreadyConsumed on a session that isn't actually
+  // needed for this vote.
+  if (diditSessionId && !data.registration_pub_key) {
     const idvAttestationSigHex = await attestWithEnclave({
       manifest,
       sessionId: diditSessionId,
@@ -215,7 +251,10 @@ async function buildVoteEnvelope({
   // identity_hash is for local receipt bookkeeping only -- matches the Go
   // core's own derivation (sha256(voter_pub_key || poll_id)) exactly, but is
   // never sent on the wire; the server re-derives it itself and does not
-  // read an identity_hash field off BallotCastData at all.
+  // read an identity_hash field off BallotCastData at all. Not meaningful
+  // for the registered-credential path (identity_hash there is
+  // sha256(firebaseUID || pollID), which this client never learns) --
+  // callers on that path should not rely on this value for receipt lookup.
   const identityHash = await sha256hex(voterPubKeyHex + scopingId);
 
   return {
@@ -837,10 +876,13 @@ export function createVotingClient({
       new_choices: newChoices,
       timestamp: Math.floor(Date.now() / 1000),
       voter_pub_key: voterPubKeyHex,
-      voter_sig: bufToBase64(voterSigBuf)
+      voter_sig: bufToBase64(voterSigBuf),
+      ...(await buildRegistrationFields({ voterPubKeyHex, scopingId, prefix: "update:" }))
     };
 
-    if (diditSessionId) {
+    // See the identical guard in buildVoteEnvelope -- mutually exclusive
+    // with the registered-credential path.
+    if (diditSessionId && !data.registration_pub_key) {
       const idvAttestationSigHex = await attestWithEnclave({
         manifest,
         sessionId: diditSessionId,
@@ -960,6 +1002,16 @@ export function createVotingClient({
       post(`/${type}`, { tx: txJson }),
 
     flushQueuedSubmissions: (type, id) => post(`/${type}/${id}/flush`, {}),
+
+    // Registered-credential embodiment: call once, after a real Didit
+    // session has reached Approved, with the user's current Firebase ID
+    // token. After this resolves, every subsequent buildVote/voteSubmission/
+    // rescindVote/replaceVote call on this browser profile automatically
+    // signs with the registered credential instead of requiring a fresh
+    // Didit session -- see providers/registeredCredential.js.
+    registerDevice: ({ sessionId, firebaseIdToken }) =>
+      registerDeviceCredential({ manifest, sessionId, firebaseIdToken, postFn: post }),
+    hasRegisteredCredential: () => hasRegisteredCredential(),
 
     async voteSubmission({ scopingId, payload, diditSessionId = null, partitionId, keypair = null }) {
       const envelope = await buildVoteEnvelope({
