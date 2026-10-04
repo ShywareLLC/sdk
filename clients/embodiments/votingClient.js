@@ -7,12 +7,6 @@
  */
 
 import { createIdentityResolver } from "../../protocol/identity/identityClient.js";
-import {
-  getOrCreateRegisteredCredential,
-  signWithRegisteredCredential,
-  registerDeviceCredential,
-  hasRegisteredCredential
-} from "../../providers/registeredCredential.js";
 
 export const SUBMISSION_MANIFEST_CONTRACT_VERSION = "shyvoting-v1"; // For compatibility, but protocol is general
 export const VOTING_MANIFEST_CONTRACT_VERSION = "shyvoting-v1";
@@ -103,6 +97,14 @@ async function fetchBeacon(getFn) {
 // certificate -- it relies on ordinary browser TLS/CA trust instead. That
 // is a real, accepted limitation of the browser platform, not an oversight;
 // note it rather than silently claiming parity with the pinned iOS path.
+// Returns { idvAttestationSigHex, identityHash } or null if no enclave/
+// session is configured. identityHash is the enclave's own person-stable
+// value (sha256(didit_document_key || poll_id), computed inside the
+// enclave from Didit's id_verification document data -- Didit's API has no
+// "person_id" field, see ShywareLLC/idv-enclave's /attest implementation)
+// -- it must be echoed back on the wire as data.identity_hash so the chain
+// can verify the enclave's signature, which covers it; the chain has no
+// way to recompute this value itself.
 async function attestWithEnclave({ manifest, sessionId, voterPubKeyHex, pollId }) {
   const baseURL = manifest?.identity?.attestation_service_base_url;
   if (!baseURL || !sessionId) return null;
@@ -120,7 +122,7 @@ async function attestWithEnclave({ manifest, sessionId, voterPubKeyHex, pollId }
     throw new Error(body.error ?? `Enclave attestation HTTP ${res.status}`);
   }
   const decoded = await res.json();
-  return decoded.idv_attestation_sig; // hex string -- re-encoded to base64 by the caller
+  return { idvAttestationSigHex: decoded.idv_attestation_sig, identityHash: decoded.identity_hash };
 }
 
 function hexToBase64(hexStr) {
@@ -139,27 +141,6 @@ function bufToHex(buf) {
 
 function bufToBase64(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf)));
-}
-
-// Registered-credential embodiment: when this browser has already
-// registered a credential (providers/registeredCredential.js), every
-// ballot cast/update is authorized by it instead of requiring a fresh
-// Didit session per vote -- see services/identity/registered_credential.go
-// on the chain side for the exact message/signature scheme this mirrors.
-// Returns {} (no fields added) when no credential is registered yet, so
-// callers fall through to the existing per-poll-key + Didit-attestation
-// path unchanged.
-async function buildRegistrationFields({ voterPubKeyHex, scopingId, prefix }) {
-  if (!(await hasRegisteredCredential())) return {};
-  const { privateKey, publicKeyHex } = await getOrCreateRegisteredCredential();
-  const sigDer = await signWithRegisteredCredential(
-    privateKey,
-    `${prefix}${voterPubKeyHex}:${scopingId}`
-  );
-  return {
-    registration_pub_key: publicKeyHex,
-    registration_sig: bufToBase64(sigDer)
-  };
 }
 
 /// Builds a TxTypeBallotCast envelope matching the real server's wire schema
@@ -223,39 +204,29 @@ async function buildVoteEnvelope({
     timestamp: Math.floor(Date.now() / 1000),
     voter_pub_key: voterPubKeyHex,
     voter_sig: voterSigBase64,
-    ...(partitionId ? { partition_id: partitionId } : {}),
-    ...(await buildRegistrationFields({ voterPubKeyHex, scopingId, prefix: "vote:" }))
+    ...(partitionId ? { partition_id: partitionId } : {})
   };
 
-  // Mutually exclusive with the registered-credential path above: once
-  // data.registration_pub_key is set, the chain's deriveBallotIdentityHash
-  // (ShywareLLC/core domain/state/registration.go) ignores IdvAttestationSig/
-  // DiditSessionID entirely for identity derivation, but validateBallotCast's
-  // global one-session-ever check still runs unconditionally on
-  // data.didit_session_id if present -- so skip it here rather than risk
-  // tripping ErrorSessionAlreadyConsumed on a session that isn't actually
-  // needed for this vote.
-  if (diditSessionId && !data.registration_pub_key) {
-    const idvAttestationSigHex = await attestWithEnclave({
+  // identity_hash is enclave-attested (sha256(didit_document_key || poll_id),
+  // computed inside the enclave -- this client never sees the document data
+  // behind it), required on the wire for the chain to verify
+  // idv_attestation_sig, which covers it: the chain has no way to recompute
+  // this value itself. Also used for local receipt bookkeeping, same value.
+  let identityHash = null;
+  if (diditSessionId) {
+    const attestation = await attestWithEnclave({
       manifest,
       sessionId: diditSessionId,
       voterPubKeyHex,
       pollId: scopingId
     });
-    if (idvAttestationSigHex) {
-      data.idv_attestation_sig = hexToBase64(idvAttestationSigHex);
+    if (attestation?.idvAttestationSigHex) {
+      data.idv_attestation_sig = hexToBase64(attestation.idvAttestationSigHex);
       data.didit_session_id = diditSessionId;
+      data.identity_hash = attestation.identityHash;
+      identityHash = attestation.identityHash;
     }
   }
-
-  // identity_hash is for local receipt bookkeeping only -- matches the Go
-  // core's own derivation (sha256(voter_pub_key || poll_id)) exactly, but is
-  // never sent on the wire; the server re-derives it itself and does not
-  // read an identity_hash field off BallotCastData at all. Not meaningful
-  // for the registered-credential path (identity_hash there is
-  // sha256(firebaseUID || pollID), which this client never learns) --
-  // callers on that path should not rely on this value for receipt lookup.
-  const identityHash = await sha256hex(voterPubKeyHex + scopingId);
 
   return {
     txJson: JSON.stringify({ type: 2, signature: "AQ==", data }),
@@ -876,22 +847,22 @@ export function createVotingClient({
       new_choices: newChoices,
       timestamp: Math.floor(Date.now() / 1000),
       voter_pub_key: voterPubKeyHex,
-      voter_sig: bufToBase64(voterSigBuf),
-      ...(await buildRegistrationFields({ voterPubKeyHex, scopingId, prefix: "update:" }))
+      voter_sig: bufToBase64(voterSigBuf)
     };
 
-    // See the identical guard in buildVoteEnvelope -- mutually exclusive
-    // with the registered-credential path.
-    if (diditSessionId && !data.registration_pub_key) {
-      const idvAttestationSigHex = await attestWithEnclave({
+    // identity_hash is enclave-attested -- see buildVoteEnvelope's identical
+    // comment above.
+    if (diditSessionId) {
+      const attestation = await attestWithEnclave({
         manifest,
         sessionId: diditSessionId,
         voterPubKeyHex,
         pollId: scopingId
       });
-      if (idvAttestationSigHex) {
-        data.idv_attestation_sig = hexToBase64(idvAttestationSigHex);
+      if (attestation?.idvAttestationSigHex) {
+        data.idv_attestation_sig = hexToBase64(attestation.idvAttestationSigHex);
         data.didit_session_id = diditSessionId;
+        data.identity_hash = attestation.identityHash;
       }
     }
 
@@ -1003,15 +974,13 @@ export function createVotingClient({
 
     flushQueuedSubmissions: (type, id) => post(`/${type}/${id}/flush`, {}),
 
-    // Registered-credential embodiment: call once, after a real Didit
-    // session has reached Approved, with the user's current Firebase ID
-    // token. After this resolves, every subsequent buildVote/voteSubmission/
-    // rescindVote/replaceVote call on this browser profile automatically
-    // signs with the registered credential instead of requiring a fresh
-    // Didit session -- see providers/registeredCredential.js.
-    registerDevice: ({ sessionId, firebaseIdToken }) =>
-      registerDeviceCredential({ manifest, sessionId, firebaseIdToken, postFn: post }),
-    hasRegisteredCredential: () => hasRegisteredCredential(),
+    // Recovery index: looks up every (poll_id, identity_hash) pair the
+    // CALLER'S OWN Firebase account has used (server-verified from the
+    // caller's own auth header, not a client-supplied id) -- a recovery aid
+    // for the rare case where Didit's id_verification document matching
+    // produces a different identity_hash for the same real person on a
+    // later device. See ShywareLLC/core's UserIdentityIndexer.
+    listMyIdentities: () => post("/recovery/identities", {}),
 
     async voteSubmission({ scopingId, payload, diditSessionId = null, partitionId, keypair = null }) {
       const envelope = await buildVoteEnvelope({
