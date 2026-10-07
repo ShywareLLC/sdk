@@ -36,6 +36,35 @@ async function sha256hex(str) {
     .join("");
 }
 
+function hexToBytes(hexStr) {
+  const bytes = new Uint8Array(hexStr.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(hexStr.substr(i * 2, 2), 16);
+  }
+  return bytes;
+}
+
+// Matches ShywareLLC/core's protocol/submission/nonce.go DeriveSubmissionID
+// EXACTLY: submission_id = SHA-256(beacon_block_hash_bytes || nonce_bytes),
+// raw byte concatenation after hex-decoding each input, not a textual/string
+// concatenation (sha256hex(str) above hashes UTF-8 bytes of a string, which
+// is a different computation entirely -- found live 2026-10-07: the
+// previous callers of this used sha256hex(hexNonce) alone, omitting the
+// beacon entirely, so the client-computed submissionId never matched the
+// chain's real on-chain value for any ballot that actually fetched a live
+// beacon. See OPS.md's 2026-10-07 entry for the full finding.
+async function deriveSubmissionIdHex(beaconBlockHash, nonceHex) {
+  const beaconBytes = hexToBytes(beaconBlockHash);
+  const nonceBytes = hexToBytes(nonceHex);
+  const combined = new Uint8Array(beaconBytes.length + nonceBytes.length);
+  combined.set(beaconBytes, 0);
+  combined.set(nonceBytes, beaconBytes.length);
+  const hash = await requiredWebCrypto().subtle.digest("SHA-256", combined);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function stableStringify(value) {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
@@ -61,11 +90,19 @@ function resolveSubmissionIdentifierDerivationMode(manifest) {
   return "nonce_only";
 }
 
-async function deriveSubmissionIdentifier({ nonceHex, payload, manifest }) {
+// Matches ShywareLLC/core's protocol/ballotrules.DeriveBallotID exactly:
+// nonce_plus_payload mode never involves the beacon (SHA-256(nonce:payload));
+// nonce_only mode (the default) is SHA-256(beacon||nonce) when a beacon hash
+// is available, falling back to SHA-256(nonce) alone only for the same
+// test/legacy case Go's own ComputeBallotID documents (empty beacon).
+async function deriveSubmissionIdentifier({ nonceHex, payload, manifest, beaconBlockHash = "" }) {
   const mode = resolveSubmissionIdentifierDerivationMode(manifest);
   if (mode === "nonce_plus_payload") {
     const canonicalPayload = stableStringify(payload);
     return sha256hex(`${nonceHex}:${canonicalPayload}`);
+  }
+  if (beaconBlockHash) {
+    return deriveSubmissionIdHex(beaconBlockHash, nonceHex);
   }
   return sha256hex(nonceHex);
 }
@@ -230,24 +267,30 @@ async function buildVoteEnvelope({
 
   return {
     txJson: JSON.stringify({ type: 2, signature: "AQ==", data }),
-    submissionId: await sha256hex(hexNonce),
+    submissionId: await deriveSubmissionIdHex(beacon.hash, hexNonce),
     hexNonce,
+    beaconBlockHash: beacon.hash,
     identityHash,
     voterPubKeyHex
   };
 }
 
-// Generalized: verifyReceipt for submission
+// Generalized: verifyReceipt for submission.
+// beaconBlockHash must be the same one returned by the original
+// buildVote/voteSubmission call (now persisted in the receipt) -- without
+// it, nonce_only-mode submissionId cannot be reproduced at all, since the
+// chain's own value is SHA-256(beacon||nonce), not SHA-256(nonce) alone.
 async function verifyReceipt(
   hexNonce,
   expectedPayload,
   submissions,
-  { manifest = null } = {}
+  { manifest = null, beaconBlockHash = "" } = {}
 ) {
   const submissionId = await deriveSubmissionIdentifier({
     nonceHex: hexNonce,
     payload: expectedPayload,
-    manifest
+    manifest,
+    beaconBlockHash
   });
   return submissions.some(
     (sub) =>
@@ -868,8 +911,9 @@ export function createVotingClient({
 
     return {
       txJson: JSON.stringify({ type: 6, signature: "AQ==", data }),
-      submissionId: await sha256hex(hexNonce),
-      hexNonce
+      submissionId: await deriveSubmissionIdHex(beacon.hash, hexNonce),
+      hexNonce,
+      beaconBlockHash: beacon.hash
     };
   }
 
