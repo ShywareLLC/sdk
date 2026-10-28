@@ -84,6 +84,7 @@
     "./clients/cam": "./clients/utilities/camClient.js",
     "./clients/hop": "./clients/utilities/hopClient.js",
     "./protocol/sealer": "./protocol/sealer.js",
+    "./protocol/voterReveal": "./protocol/voterReveal.js",
     "./protocol/anonLayer": "./protocol/anonLayer.js",
     "./protocol/walletProof": "./protocol/walletProof.js",
     "./protocol/submissionId": "./protocol/submissionId.js",

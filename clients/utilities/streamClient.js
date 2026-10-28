@@ -62,11 +62,6 @@ export function assertStreamManifest(shyconfig) {
     );
   }
 
-  if (!shyconfig?.signing?.required || shyconfig.signing.backend === "none") {
-    throw new Error(
-      "shyconfig must require protocol signing for shystream apps."
-    );
-  }
 
   if (!shyconfig?.store) {
     throw new Error(

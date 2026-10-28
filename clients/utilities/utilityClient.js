@@ -24,9 +24,6 @@ export function assertUtilityManifest(shyconfig, utilityName = "utility") {
     );
   }
 
-  if (!shyconfig?.signing?.required || shyconfig?.signing?.backend === "none") {
-    throw new Error(`${utilityName} requires protocol signing.`);
-  }
 
   if (!shyconfig?.store) {
     throw new Error(`${utilityName} requires a store block.`);

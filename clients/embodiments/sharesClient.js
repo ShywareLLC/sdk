@@ -63,11 +63,6 @@ export function assertSharesManifest(shyconfig) {
     );
   }
 
-  if (!shyconfig.signing?.required || shyconfig.signing.backend === "none") {
-    throw new Error(
-      "shyconfig must require protocol signing for shyshares apps."
-    );
-  }
 
   if (!shyconfig.governance || !shyconfig.execution) {
     throw new Error(

@@ -87,11 +87,6 @@ export function assertBetsManifest(shyconfig) {
     );
   }
 
-  if (!shyconfig?.signing?.required || shyconfig.signing.backend === "none") {
-    throw new Error(
-      "shyconfig must require protocol signing for shybets apps."
-    );
-  }
 
   if (!shyconfig?.wire) {
     throw new Error(

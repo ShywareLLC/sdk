@@ -127,11 +127,6 @@ export function assertWireManifest(shyconfig) {
     }
   }
 
-  if (!shyconfig.signing?.required || shyconfig.signing.backend === "none") {
-    throw new Error(
-      "shyconfig must require protocol signing for shywire apps."
-    );
-  }
 
   if (!shyconfig.wire) {
     throw new Error("shyconfig must declare wire settings for shywire apps.");

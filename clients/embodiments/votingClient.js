@@ -6,6 +6,8 @@
  * through this module so product surfaces cannot silently skip steps.
  */
 
+import { CoverTrafficDispatcher, DISPATCH_BYTES } from "../../adapters/ledger/coverTraffic.js";
+
 import { createIdentityResolver } from "../../protocol/identity/identityClient.js";
 
 export const SUBMISSION_MANIFEST_CONTRACT_VERSION = "shyvoting-v1"; // For compatibility, but protocol is general
@@ -37,6 +39,9 @@ async function sha256hex(str) {
 }
 
 function hexToBytes(hexStr) {
+  if (!/^[0-9a-f]{64}$/i.test(hexStr)) {
+    throw new Error("A 32-byte hexadecimal beacon and nonce are required.");
+  }
   const bytes = new Uint8Array(hexStr.length / 2);
   for (let i = 0; i < bytes.length; i++) {
     bytes[i] = parseInt(hexStr.substr(i * 2, 2), 16);
@@ -286,6 +291,9 @@ async function verifyReceipt(
   submissions,
   { manifest = null, beaconBlockHash = "" } = {}
 ) {
+  if (resolveSubmissionIdentifierDerivationMode(manifest) === "nonce_only" && !beaconBlockHash) {
+    throw new Error("Receipt verification requires the original beacon block hash.");
+  }
   const submissionId = await deriveSubmissionIdentifier({
     nonceHex: hexNonce,
     payload: expectedPayload,
@@ -672,25 +680,6 @@ export function assertVotingManifest(shyconfig) {
     );
   }
 
-  if (!shyconfig.signing?.required) {
-    throw new Error("shyconfig must require protocol signing for voting apps.");
-  }
-
-  if (shyconfig.signing.backend === "none") {
-    throw new Error("shyconfig cannot disable signing for voting apps.");
-  }
-
-  if (["aws_kms", "aws_kms_x_aws_cloudhsm"].includes(shyconfig.signing.backend)) {
-    if (
-      !shyconfig.signing.validator_key_id ||
-      !shyconfig.signing.tally_key_id
-    ) {
-      throw new Error(
-        "Managed KMS voting apps must declare validator and tally key IDs."
-      );
-    }
-  }
-
   if (!shyconfig.receipts?.match_store) {
     throw new Error("shyconfig must declare receipt handling for voting apps.");
   }
@@ -766,6 +755,7 @@ export function assertVotingManifest(shyconfig) {
 export function createVotingClient({
   defaultBase = "/api",
   defaultSubmitBase = null,
+  voterRevealBase = null,
   storageKey = "shyware_api_base",
   fetchImpl = globalThis.fetch?.bind(globalThis),
   getAuthHeaders = null,
@@ -824,7 +814,30 @@ export function createVotingClient({
     return res.json();
   }
 
+  const cover = manifest?.deployment?.submission_dispatch === "cover_traffic"
+    ? new CoverTrafficDispatcher(async encoded => {
+        const res = await fetchImpl(joinBaseAndPath(getSubmitBase(), "/dispatch"), {
+          method: "POST",
+          headers: await resolveHeaders({ "Content-Type": "application/json" }),
+          body: encoded,
+          cache: "no-store",
+          signal: AbortSignal.timeout(30000)
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const raw = await res.text();
+        if (new TextEncoder().encode(raw).length !== DISPATCH_BYTES) throw new Error("Invalid dispatch response size");
+        const result = JSON.parse(raw);
+        if (!Number.isInteger(result.status) || result.status < 200 || result.status >= 300) {
+          throw new Error(result.body?.error ?? `HTTP ${result.status}`);
+        }
+        return result.body;
+      }, { ratePerMinute: manifest.deployment.cover_traffic_rate ?? 10 })
+    : null;
+
   async function post(path, body) {
+    if (cover && (path === "/ballots" || path === "/ballots/update")) {
+      return cover.submit(path === "/ballots" ? "cast" : "update", body);
+    }
     let res;
     try {
       res = await fetchImpl(joinBaseAndPath(getSubmitBase(), path), {
@@ -918,6 +931,21 @@ export function createVotingClient({
   }
 
   return {
+    async getVoterReveal(pollId) {
+      if (!voterRevealBase) throw new Error("A consumer voter reveal API base is required");
+      const response = await fetchImpl(`${normalizeBase(voterRevealBase)}/polls/${encodeURIComponent(pollId)}/voter-reveal`);
+      if (!response.ok) throw new Error("Voter reveal is unavailable");
+      return response.json();
+    },
+    async registerVoterReveal({ pollId, sessionId }) {
+      if (!voterRevealBase || !getAuthHeaders) throw new Error("Authenticated consumer voter reveal API is required");
+      const response = await fetchImpl(`${normalizeBase(voterRevealBase)}/polls/${encodeURIComponent(pollId)}/voter-reveal`, {
+        method: "POST", headers: { ...await getAuthHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId })
+      });
+      if (!response.ok) throw new Error("Voter reveal registration failed; the vote is unchanged");
+      return response.json();
+    },
     initialize() {
       const posture = resolveEffectivePosture(manifest, runtimeSignals);
       const ra = manifest?.deployment?.reconcile_authority ?? null;
@@ -940,6 +968,8 @@ export function createVotingClient({
         requiredFlows: manifest?.anon_layer?.required_flows ?? []
       };
     },
+    startCoverTraffic: () => cover?.start(),
+    stopCoverTraffic: () => cover?.stop(),
     getBase,
     setBase,
     getSubmitBase,
@@ -1144,6 +1174,7 @@ export function initializeFromShyConfig(shyconfig, options = {}) {
   const client = createVotingClient({
     defaultBase: shyconfig.api?.base_url ?? "/api",
     defaultSubmitBase: shyconfig.api?.submit_base_url ?? null,
+    voterRevealBase: shyconfig.api?.voter_reveal_base_url ?? null,
     storageKey:
       shyconfig.api?.storage_key ?? options.storageKey ?? "shyware_api_base",
     fetchImpl: options.fetchImpl,

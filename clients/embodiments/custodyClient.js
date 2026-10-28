@@ -110,11 +110,6 @@ export function assertCustodyManifest(shyconfig) {
     );
   }
 
-  if (!shyconfig.signing?.required || shyconfig.signing.backend === "none") {
-    throw new Error(
-      "shyconfig must require protocol signing for shycustody apps."
-    );
-  }
 
   if (!shyconfig.custody) {
     throw new Error(

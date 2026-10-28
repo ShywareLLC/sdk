@@ -78,12 +78,6 @@ export function assertContractsManifest(shyconfig) {
       throw new Error(`shyconfig is missing required shycontracts flow: ${flow}`);
     }
   }
-  if (!shyconfig.signing?.required || shyconfig.signing.backend === "none") {
-    throw new Error("shyconfig must require protocol signing for shycontracts apps.");
-  }
-  if (["aws_kms", "aws_kms_x_aws_cloudhsm"].includes(shyconfig.signing.backend) && !shyconfig.signing.contract_key_id) {
-    throw new Error("Managed KMS shycontracts apps must declare contract_key_id.");
-  }
   const block = getContractsBlock(shyconfig);
   if (!block) {
     throw new Error("shyconfig must declare a `contracts` (or `financing`) block for shycontracts apps.");

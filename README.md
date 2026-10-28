@@ -33,6 +33,12 @@ No join key between List 1 and List 2 is ever written to canonical state. The re
 
 ## Installation
 
+Protocol signing is optional. Unsigned manifests (`signing.required: false`,
+`signing.backend: "none"`) retain structural anonymity and count-match guarantees.
+Identity/device authentication is separate and remains required where configured.
+For beacon-conditioned voting receipts, retain the original `beaconBlockHash`
+alongside the nonce and pass it to `verifyReceipt`; missing beacon material is rejected.
+
 ```bash
 npm install @shyware/sdk
 ```

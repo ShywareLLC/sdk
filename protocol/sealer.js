@@ -11,14 +11,14 @@ export async function hkdf(
 ) {
   // HKDF-SHA256 to derive a key from the provider secret
   const enc = new TextEncoder();
-  const keyMaterial = await window.crypto.subtle.importKey(
+  const keyMaterial = await globalThis.crypto.subtle.importKey(
     "raw",
     typeof secret === "string" ? enc.encode(secret) : secret,
     "HKDF",
     false,
     ["deriveKey"]
   );
-  return window.crypto.subtle.deriveKey(
+  return globalThis.crypto.subtle.deriveKey(
     {
       name: "HKDF",
       hash: "SHA-256",
@@ -34,9 +34,9 @@ export async function hkdf(
 
 export async function sealPayload(payload, deriveSealerKey) {
   const key = await getMasterKey(deriveSealerKey);
-  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(JSON.stringify(payload));
-  const ciphertext = await window.crypto.subtle.encrypt(
+  const ciphertext = await globalThis.crypto.subtle.encrypt(
     { name: "AES-GCM", iv },
     key,
     encoded
@@ -49,10 +49,18 @@ export async function sealPayload(payload, deriveSealerKey) {
 }
 
 export async function openPayload(sealedPayload, deriveSealerKey) {
+  if (sealedPayload?.alg !== "aes-256-gcm" ||
+      !Array.isArray(sealedPayload.iv) || sealedPayload.iv.length !== 12 ||
+      !Array.isArray(sealedPayload.ciphertext) || sealedPayload.ciphertext.length < 16 ||
+      ![...sealedPayload.iv, ...sealedPayload.ciphertext].every(
+        value => Number.isInteger(value) && value >= 0 && value <= 255
+      )) {
+    throw new Error("Invalid AES-256-GCM sealed envelope");
+  }
   const key = await getMasterKey(deriveSealerKey);
   const iv = new Uint8Array(sealedPayload.iv);
   const ciphertext = new Uint8Array(sealedPayload.ciphertext);
-  const decrypted = await window.crypto.subtle.decrypt(
+  const decrypted = await globalThis.crypto.subtle.decrypt(
     { name: "AES-GCM", iv },
     key,
     ciphertext

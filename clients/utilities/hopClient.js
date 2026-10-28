@@ -105,9 +105,6 @@ export function assertHopManifest(shyconfig) {
     throw new Error("shyhop requires anon_layer.black_box_required=true.");
   }
 
-  if (!shyconfig?.signing?.required || shyconfig?.signing?.backend === "none") {
-    throw new Error("shyhop requires protocol signing.");
-  }
 
   if (!shyconfig?.store) {
     throw new Error("shyhop requires a store block.");

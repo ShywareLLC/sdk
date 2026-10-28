@@ -25,11 +25,18 @@
  * @returns {Promise<string>}          — hex-encoded submission identifier
  */
 export async function deriveSubmissionId(canonicalBlockHash, nonce) {
-  const nonceHex = nonce instanceof Uint8Array
-    ? Array.from(nonce).map(b => b.toString(16).padStart(2, '0')).join('')
-    : String(nonce);
-  const input = `${canonicalBlockHash}:${nonceHex}`;
-  const buf = new TextEncoder().encode(input);
+  function decodeHex(value) {
+    if (typeof value !== 'string' || !/^[0-9a-f]{64}$/i.test(value)) {
+      throw new Error('A 32-byte hexadecimal beacon and nonce are required.');
+    }
+    return Uint8Array.from(value.match(/../g), byte => parseInt(byte, 16));
+  }
+  const beaconBytes = decodeHex(canonicalBlockHash);
+  const nonceBytes = nonce instanceof Uint8Array ? nonce : decodeHex(nonce);
+  if (nonceBytes.length !== 32) throw new Error('The submission nonce must be 32 bytes.');
+  const buf = new Uint8Array(beaconBytes.length + nonceBytes.length);
+  buf.set(beaconBytes);
+  buf.set(nonceBytes, beaconBytes.length);
   const hash = await crypto.subtle.digest('SHA-256', buf);
   return Array.from(new Uint8Array(hash))
     .map(b => b.toString(16).padStart(2, '0'))
