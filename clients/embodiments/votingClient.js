@@ -128,42 +128,60 @@ async function fetchBeacon(getFn) {
   return { hash, height };
 }
 
-// Requests idv_attestation_sig from the deployment's own IDV attestation
-// enclave (identity.attestation_service_base_url) -- an independent service
-// that re-verifies the Didit session against Didit's real API before
-// signing, so this device/app never holds (and the Populist backend never
-// needs to hold) the enclave's private signing key. Mirrors
-// EnclaveAttestationClient.attest in ShywareLLC/sdk-ios exactly, except:
-// browsers have no public API for certificate/public-key pinning on a
-// fetch() call, so unlike the iOS client this cannot pin the enclave's
-// certificate -- it relies on ordinary browser TLS/CA trust instead. That
-// is a real, accepted limitation of the browser platform, not an oversight;
-// note it rather than silently claiming parity with the pinned iOS path.
-// Returns { idvAttestationSigHex, identityHash } or null if no enclave/
-// session is configured. identityHash is the enclave's own person-stable
-// value (sha256(didit_document_key || poll_id), computed inside the
-// enclave from Didit's id_verification document data -- Didit's API has no
-// "person_id" field, see ShywareLLC/idv-enclave's /attest implementation)
-// -- it must be echoed back on the wire as data.identity_hash so the chain
-// can verify the enclave's signature, which covers it; the chain has no
-// way to recompute this value itself.
-async function attestWithEnclave({ manifest, sessionId, voterPubKeyHex, pollId }) {
-  const baseURL = manifest?.identity?.attestation_service_base_url;
-  if (!baseURL || !sessionId) return null;
-  const res = await fetch(`${baseURL.replace(/\/$/, "")}/attest`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: sessionId,
-      voter_pub_key: voterPubKeyHex,
-      poll_id: pollId
-    })
+// Device enrollment and ballot-key attestation against the deployment's IDV
+// enclave (identity.attestation_service_base_url). Mirrors
+// EnclaveAttestationClient in ShywareLLC/sdk-ios: right after Didit
+// verification the device trades the session, once, for a device secret and
+// an identity key (POST /device-secret/enroll); each ballot key is then
+// attested with an HMAC over the request made with that secret plus the
+// identity key (POST /attest). No Didit session id is ever sent with a ballot
+// or put on the ledger -- session ids are not secret (Populist's server and
+// past ledger entries hold them). Browsers can't pin the enclave's
+// certificate on fetch(); this relies on ordinary browser TLS trust, a known
+// platform limitation the iOS client doesn't share.
+const enclaveBase = (manifest) => manifest?.identity?.attestation_service_base_url?.replace(/\/$/, "") || null;
+
+async function enclavePost(manifest, path, body) {
+  const baseURL = enclaveBase(manifest);
+  if (!baseURL) throw new Error("identity.attestation_service_base_url is not configured");
+  const res = await fetch(`${baseURL}${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
   });
+  const decoded = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? `Enclave attestation HTTP ${res.status}`);
+    const error = new Error(decoded.error ?? `Enclave HTTP ${res.status}`);
+    error.status = res.status; error.code = decoded.code;
+    throw error;
   }
-  const decoded = await res.json();
+  return decoded;
+}
+
+async function hmacSha256Hex(secretHex, message) {
+  const key = await requiredWebCrypto().subtle.importKey("raw", hexToBytes(secretHex), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return bufToHex(await requiredWebCrypto().subtle.sign("HMAC", key, new TextEncoder().encode(message)));
+}
+
+/// Trades a just-Approved Didit session (once) for this device's credential:
+/// { userId, deviceId, secretHex, identityKeyHex }. Store it on the device;
+/// a 409 (error.code "session_used") means the session was already used.
+export async function enrollDeviceSecret({ manifest, sessionId, userId }) {
+  const enrolled = await enclavePost(manifest, "/device-secret/enroll", { session_id: sessionId, user_id: userId });
+  return { userId, deviceId: enrolled.device_id, secretHex: enrolled.secret_hex, identityKeyHex: enrolled.identity_key_hex };
+}
+
+// Returns { idvAttestationSigHex, identityHash } or null without a device
+// credential. identityHash is the enclave's person-stable
+// sha256(document_key || poll_id); it goes on the wire as data.identity_hash
+// so the chain can verify the enclave's signature, which covers it.
+async function attestWithEnclave({ manifest, device, voterPubKeyHex, pollId }) {
+  if (!device || !enclaveBase(manifest)) return null;
+  const timestamp = new Date().toISOString();
+  const mac = await hmacSha256Hex(device.secretHex,
+    ["shyware-ballot-key-request-v1", device.userId, device.deviceId, voterPubKeyHex, pollId, timestamp].join("\n"));
+  const decoded = await enclavePost(manifest, "/attest", {
+    user_id: device.userId, device_id: device.deviceId, voter_pub_key: voterPubKeyHex, poll_id: pollId,
+    timestamp, mac, identity_key: device.identityKeyHex
+  });
   return { idvAttestationSigHex: decoded.idv_attestation_sig, identityHash: decoded.identity_hash };
 }
 
@@ -198,7 +216,7 @@ async function buildVoteEnvelope({
   manifest,
   scopingId,
   payload,
-  diditSessionId = null,
+  device = null,
   partitionId = undefined,
   getFn,
   keypair = null
@@ -255,19 +273,12 @@ async function buildVoteEnvelope({
   // idv_attestation_sig, which covers it: the chain has no way to recompute
   // this value itself. Also used for local receipt bookkeeping, same value.
   let identityHash = null;
-  if (diditSessionId) {
-    const attestation = await attestWithEnclave({
-      manifest,
-      sessionId: diditSessionId,
-      voterPubKeyHex,
-      pollId: scopingId
-    });
-    if (attestation?.idvAttestationSigHex) {
-      data.idv_attestation_sig = hexToBase64(attestation.idvAttestationSigHex);
-      data.didit_session_id = diditSessionId;
-      data.identity_hash = attestation.identityHash;
-      identityHash = attestation.identityHash;
-    }
+  // No didit_session_id on the ballot: it would be public on the ledger.
+  const attestation = await attestWithEnclave({ manifest, device, voterPubKeyHex, pollId: scopingId });
+  if (attestation?.idvAttestationSigHex) {
+    data.idv_attestation_sig = hexToBase64(attestation.idvAttestationSigHex);
+    data.identity_hash = attestation.identityHash;
+    identityHash = attestation.identityHash;
   }
 
   return {
@@ -874,7 +885,7 @@ export function createVotingClient({
     scopingId,
     oldSubmissionId,
     newChoices,
-    diditSessionId = null,
+    device = null,
     getFn,
     keypair
   }) {
@@ -908,18 +919,10 @@ export function createVotingClient({
 
     // identity_hash is enclave-attested -- see buildVoteEnvelope's identical
     // comment above.
-    if (diditSessionId) {
-      const attestation = await attestWithEnclave({
-        manifest,
-        sessionId: diditSessionId,
-        voterPubKeyHex,
-        pollId: scopingId
-      });
-      if (attestation?.idvAttestationSigHex) {
-        data.idv_attestation_sig = hexToBase64(attestation.idvAttestationSigHex);
-        data.didit_session_id = diditSessionId;
-        data.identity_hash = attestation.identityHash;
-      }
+    const attestation = await attestWithEnclave({ manifest, device, voterPubKeyHex, pollId: scopingId });
+    if (attestation?.idvAttestationSigHex) {
+      data.idv_attestation_sig = hexToBase64(attestation.idvAttestationSigHex);
+      data.identity_hash = attestation.identityHash;
     }
 
     return {
@@ -1015,12 +1018,13 @@ export function createVotingClient({
     // never actually reached the wire -- the Go core's BallotCastData has no
     // identity_hash field at all; it always re-derives identity_hash itself
     // from voter_pub_key. For the default Didit-attestation embodiment
-    // (identity.provider: "didit"), the real identity-binding input the
-    // server needs is diditSessionId, passed to the IDV attestation enclave.
+    // (identity.provider: "didit"), the identity binding comes from the IDV
+    // enclave's attestation, proven with this device's enrolled credential
+    // (`device`, from enrollDeviceSecret) -- never a Didit session id.
     // Other identity modes (wallet, identus) are not yet wired into this
     // corrected envelope -- narrowing this fix to the embodiment this
     // deployment actually uses rather than guessing at the other two.
-    async buildVote({ scopingId, payload, diditSessionId = null, partitionId, keypair = null }) {
+    async buildVote({ scopingId, payload, device = null, partitionId, keypair = null }) {
       if (!scopingId || !payload) {
         throw new Error("scopingId and payload are required.");
       }
@@ -1028,7 +1032,7 @@ export function createVotingClient({
         manifest,
         scopingId,
         payload,
-        diditSessionId,
+        device,
         partitionId,
         getFn: get,
         keypair
@@ -1056,12 +1060,12 @@ export function createVotingClient({
     // later device. See ShywareLLC/core's UserIdentityIndexer.
     listMyIdentities: () => post("/recovery/identities", {}),
 
-    async voteSubmission({ scopingId, payload, diditSessionId = null, partitionId, keypair = null }) {
+    async voteSubmission({ scopingId, payload, device = null, partitionId, keypair = null }) {
       const envelope = await buildVoteEnvelope({
         manifest,
         scopingId,
         payload,
-        diditSessionId,
+        device,
         partitionId,
         getFn: get,
         keypair
@@ -1078,14 +1082,14 @@ export function createVotingClient({
     // POST /ballots/update): the client already holds oldSubmissionId from
     // its own local receipt, so it builds and signs the full envelope
     // itself rather than sending bare fields for the server to reconcile.
-    async rescindVote({ scopingId, oldSubmissionId, diditSessionId = null, keypair }) {
-      const envelope = await buildUpdateEnvelope({ manifest, scopingId, oldSubmissionId, newChoices: [], diditSessionId, getFn: get, keypair });
+    async rescindVote({ scopingId, oldSubmissionId, device = null, keypair }) {
+      const envelope = await buildUpdateEnvelope({ manifest, scopingId, oldSubmissionId, newChoices: [], device, getFn: get, keypair });
       await post("/ballots/update", { tx: envelope.txJson });
       return envelope;
     },
 
-    async replaceVote({ scopingId, oldSubmissionId, newPayload, diditSessionId = null, keypair }) {
-      const envelope = await buildUpdateEnvelope({ manifest, scopingId, oldSubmissionId, newChoices: [newPayload], diditSessionId, getFn: get, keypair });
+    async replaceVote({ scopingId, oldSubmissionId, newPayload, device = null, keypair }) {
+      const envelope = await buildUpdateEnvelope({ manifest, scopingId, oldSubmissionId, newChoices: [newPayload], device, getFn: get, keypair });
       await post("/ballots/update", { tx: envelope.txJson });
       return envelope;
     },
