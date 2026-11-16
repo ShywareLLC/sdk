@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { enrollDeviceSecret } from "../clients/embodiments/votingClient.js";
+import { createHash } from "node:crypto";
+import { enrollDeviceSecret, createEnrollmentCommitment } from "../clients/embodiments/votingClient.js";
 
 const manifest = { identity: { attestation_service_base_url: "https://enclave.test/" } };
 
@@ -11,9 +12,9 @@ test("enrollment trades the session for a device credential", async () => {
     sent.push({ url, body: JSON.parse(init.body) });
     return { ok: true, status: 200, json: async () => ({ device_id: "d1", secret_hex: "ab".repeat(32), identity_key_hex: "cd".repeat(32) }) };
   };
-  const device = await enrollDeviceSecret({ manifest, sessionId: "s1", userId: "alice" });
+  const device = await enrollDeviceSecret({ manifest, sessionId: "s1", userId: "alice", enrollmentSecretHex: "5e".repeat(32) });
   assert.equal(sent[0].url, "https://enclave.test/device-secret/enroll");
-  assert.deepEqual(sent[0].body, { session_id: "s1", user_id: "alice" });
+  assert.deepEqual(sent[0].body, { session_id: "s1", user_id: "alice", enrollment_secret: "5e".repeat(32) });
   assert.deepEqual(device, { userId: "alice", deviceId: "d1", secretHex: "ab".repeat(32), identityKeyHex: "cd".repeat(32) });
 });
 
@@ -24,4 +25,10 @@ test("the ballot-key MAC matches the enclave's (same fields, same HMAC)", async 
   const key = await crypto.subtle.importKey("raw", Buffer.from("ab".repeat(32), "hex"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const mac = Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(fields.join("\n")))).toString("hex");
   assert.equal(mac, expected);
+});
+
+test("the commitment is the SHA-256 of the device's secret", async () => {
+  const { secretHex, commitmentHex } = await createEnrollmentCommitment();
+  assert.match(secretHex, /^[0-9a-f]{64}$/);
+  assert.equal(commitmentHex, createHash("sha256").update(Buffer.from(secretHex, "hex")).digest("hex"));
 });

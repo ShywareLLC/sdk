@@ -161,11 +161,24 @@ async function hmacSha256Hex(secretHex, message) {
   return bufToHex(await requiredWebCrypto().subtle.sign("HMAC", key, new TextEncoder().encode(message)));
 }
 
+/// Before a Didit verification starts: a secret only this device keeps, and
+/// its SHA-256 commitment, which goes into the session's vendor_data
+/// (deviceCommitment on the backend's create-session call). Keep secretHex on
+/// the device until enrollment; nobody else can enroll with the session.
+export async function createEnrollmentCommitment() {
+  const secret = requiredWebCrypto().getRandomValues(new Uint8Array(32));
+  const digest = await requiredWebCrypto().subtle.digest("SHA-256", secret);
+  return { secretHex: bufToHex(secret), commitmentHex: bufToHex(digest) };
+}
+
 /// Trades a just-Approved Didit session (once) for this device's credential:
-/// { userId, deviceId, secretHex, identityKeyHex }. Store it on the device;
-/// a 409 (error.code "session_used") means the session was already used.
-export async function enrollDeviceSecret({ manifest, sessionId, userId }) {
-  const enrolled = await enclavePost(manifest, "/device-secret/enroll", { session_id: sessionId, user_id: userId });
+/// { userId, deviceId, secretHex, identityKeyHex }. `enrollmentSecretHex` is
+/// the secret from createEnrollmentCommitment for this verification. A 409
+/// (error.code "session_used") means the session was already used.
+export async function enrollDeviceSecret({ manifest, sessionId, userId, enrollmentSecretHex }) {
+  const enrolled = await enclavePost(manifest, "/device-secret/enroll", {
+    session_id: sessionId, user_id: userId, enrollment_secret: enrollmentSecretHex
+  });
   return { userId, deviceId: enrolled.device_id, secretHex: enrolled.secret_hex, identityKeyHex: enrolled.identity_key_hex };
 }
 
